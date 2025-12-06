@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>韓國之旅：親友旅遊小工具</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        /* 設置全域字體為 Noto Sans TC */
+        /* === 更新為新的顏色配置 === */
+        :root {
+            --color-bg-primary: #faf8f5; /* 保持極淺底色 */
+            --color-bg-card: #ffffff; /* 純白 */
+            --color-text-main: #514378; /* 深紫 (Primary Text/Dark Contrast) */
+            --color-accent: #EBC79A; /* 暖金色 (Main Accent/Headers) */
+            --color-divider: #eac9b8; /* 柔和粉色 (Soft Divider/Border) */
+            --color-highlight: #F8D77A; /* 經典暖黃 (Highlight/Important Time) */
+        }
+
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: var(--color-bg-primary);
+            color: var(--color-text-main);
+            padding-bottom: 4rem; /* 底部空間留給導航列 */
+            line-height: 1.6;
+        }
+
+        /* 導航列樣式 */
+        .nav-item {
+            color: var(--color-text-main);
+            transition: color 0.2s, background-color 0.2s;
+        }
+        .nav-item.active {
+            color: var(--color-text-main); /* 導航選中時使用深紫 */
+            background-color: var(--color-highlight);
+            border-radius: 8px;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+        }
+
+        /* 卡片通用樣式 */
+        .muji-card {
+            background-color: var(--color-bg-card);
+            border: 1px solid var(--color-divider);
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.03);
+            transition: transform 0.1s;
+        }
+
+        /* 按鈕通用樣式 */
+        .muji-btn {
+            background-color: var(--color-text-main); /* 使用最深的顏色作按鈕背景，確保可視性 */
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-weight: 500;
+            transition: background-color 0.2s, box-shadow 0.2s;
+        }
+        .muji-btn:hover {
+            background-color: #3d3151; /* Slightly darker deep purple */
+        }
+        .muji-btn-light {
+             background-color: var(--color-bg-primary);
+             color: var(--color-text-main);
+             border: 1px solid var(--color-divider);
+        }
+
+        /* 時間軸線條 */
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: 20px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background-color: var(--color-divider);
+        }
+        .timeline-dot {
+            position: absolute;
+            left: 14px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background-color: var(--color-text-main);
+            border: 2px solid var(--color-bg-primary);
+            z-index: 10;
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+
+    <header class="sticky top-0 z-20 bg-white shadow-md p-4 flex justify-between items-center border-b" style="border-color: var(--color-divider);">
+        <h1 class="text-xl font-bold" style="color: var(--color-text-main);">🇰🇷 首爾輕旅行</h1>
+        <div id="current-exchange-rate" class="text-sm font-medium px-3 py-1 rounded-full" style="background-color: var(--color-bg-primary); color: var(--color-text-main);">
+            KRW/TWD: -
+        </div>
+    </header>
+
+    <main id="app-content" class="p-4 pt-6 max-w-xl mx-auto">
+        </main>
+
+    <footer class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-30">
+        <nav class="flex justify-around items-center h-16 max-w-xl mx-auto">
+            <button class="nav-item flex flex-col items-center p-2 active" data-tab="FLIGHTS_STAY">
+                <i class="fas fa-plane text-xl"></i>
+                <span class="text-xs mt-1">航班住宿</span>
+            </button>
+            <button class="nav-item flex flex-col items-center p-2" data-tab="ITINERARY">
+                <i class="fas fa-calendar-alt text-xl"></i>
+                <span class="text-xs mt-1">行程表</span>
+            </button>
+            <button class="nav-item flex flex-col items-center p-2" data-tab="GUIDE">
+                <i class="fas fa-map-marked-alt text-xl"></i>
+                <span class="text-xs mt-1">導覽</span>
+            </button>
+            <button class="nav-item flex flex-col items-center p-2" data-tab="WALLET">
+                <i class="fas fa-calculator text-xl"></i>
+                <span class="text-xs mt-1">記帳</span>
+            </button>
+            <button class="nav-item flex flex-col items-center p-2" data-tab="LISTS">
+                <i class="fas fa-list-check text-xl"></i>
+                <span class="text-xs mt-1">清單</span>
+            </button>
+            <button class="nav-item flex flex-col items-center p-2" data-tab="INFO">
+                <i class="fas fa-info-circle text-xl"></i>
+                <span class="text-xs mt-1">資訊</span>
+            </button>
+        </nav>
+    </footer>
+
+    <script>
+        // --- 全域變數與初始化資料 ---
+        const APP_ID = 'KR_TRIP_APP'; // LocalStorage 命名空間
+        const exchangeRateKey = `${APP_ID}_EXCHANGE_RATE`;
+        const expensesKey = `${APP_ID}_EXPENSES`;
+        const checklistKey = `${APP_ID}_CHECKLIST`;
+        const memoKey = `${APP_ID}_MEMO`;
+
+        let currentRate = 0.024; // 預設韓元到台幣匯率 (可調整)
+        const TWD_SYMBOL = 'NT$';
+
+        // 核心行程數據 - 已更新航班與餐廳資訊，並加入營業時間與地址
+        const tripData = {
+            flights: "去程：2026/2/13 華航CI164 高雄-仁川 (07:10 - 10:55)；回程：2026/2/21 華航CI165 仁川-高雄 (12:00 - 14:10)",
+            accommodation: [
+                // [0] 大自然韓屋旅館
+                { date: "2/13 - 2/15", name: "大自然韓屋旅館 (Dajayon Hanok Stay)", address: "81-3, Yulgok-ro 10-gil, Jongro-gu, 鐘路, 首爾, 韓國", mapLink: "https://www.google.com/maps/place/Dajayon+Hanok+Stay/data=!4m2!3m1!1s0x357ca352a7cdd2d5:0x5c2a92c61f4e3531?sa=X&ved=1t:242&ictx=111" },
+                // [1] Airbnb
+                { date: "2/15 - 2/21", name: "Airbnb 旅館 (麻浦區)", address: "29 Dohwa 2-gil, Dohwa-dong, Mapo-gu, Seoul, South Korea", mapLink: "https://www.google.com/maps/place/29+Dohwa+2-gil,+Mapo-gu,+Seoul,+%E5%8D%97%E9%9F%93/@37.5394541,126.9496077,17z/data=!3m1!4b1!4m6!3m5!1s0x357c98a8a4569029:0x95d15235dbbefdfc!8m2!3d37.5394541!4d126.9496077!16s%2Fg%2F11bzgc92fl?entry=ttu&g_ep=EgoyMDI1MTEyMy4xIKXMDSoASAFQAw%3D%3D" }
+            ],
+            itinerary: [
+                { date: "2/13 (五)", items: [
+                    { time: "中午前", name: "抵達仁川、包車至住宿點", type: "Travel", highlight: true, notes: "CI164 預計 10:55 抵達，直接搭車前往市區" },
+                    // UPDATED 1: 北村大瓦房醬蟹
+                    { time: "午餐", name: "큰기와집(大瓦房醬蟹-北村)", type: "Food", notes: "米其林一星", link: "https://maps.app.goo.gl/cnKvroKdRau3itxz5", hours: "每日 12:00–21:00 (平日休息 15:00–17:00)", address_copy: "서울 종로구 북촌로 22 1층" },
+                    // UPDATED 2: 明洞大使館換錢
+                    { time: "下午", name: "대사관앞환전 (明洞大使館換錢)", type: "Activity", hours: "每日 09:00–20:00", address_copy: "서울 중구 명동2길 26" },
+                    { time: "下午", name: "明洞逛街", type: "Activity" },
+                    // UPDATED 3: 朝朝刀削麵
+                    { time: "晚餐", name: "조조칼국수 시청점 (朝朝刀削麵 市政廳店)", type: "Food", link: "https://maps.app.goo.gl/3A2X4Y8k2T5eP8wQ7", hours: "每日 11:00–21:00 (休息時間 15:00–17:00)", address_copy: "27 Sejong-daero 11-gil, Jung District, Seoul, 南韓" }
+                ]},
+                { date: "2/14 (六)", items: [
+                    // CHANGE 1: 明月格韓服裝髮 -> 明月閣韓服 + 地址 + 備註
+                    { time: "08:30", name: "明月閣韓服", type: "Activity", highlight: true, address_copy: "서울 종로구 사직로 105 1층", notes: "服裝付現5萬~10萬不等，含帽扇鞋，女生編髮配飾；襪子自備（建議白襪）化妝另加價" },
+                    // CHANGE 2: 景福宮韓服拍照 -> 景福宮-亞賓攝影師 + 時間 + 地址
+                    { time: "10:30-12:00", name: "景福宮-亞賓攝影師", type: "Activity", link: "https://maps.app.goo.gl/3hJ5D7NqZ4pLg6F8A", address_copy: "景福宮" },
+                    // UPDATED 4: 土俗村蔘雞湯
+                    { time: "午餐", name: "토속촌 삼계탕 (土俗村蔘雞湯)", type: "Food", link: "https://maps.app.goo.gl/5z4B1wUuLu6eK8tY8", naver_link: "https://naver.me/FM6Bdfws", hours: "每日 10:00–22:00", address_copy: "5 Jahamun-ro 5-gil, JongnoDistrict, Seoul, 南韓" },
+                    // CHANGE 3: 古宮博物館 - 新增 Google Map Link
+                    { time: "下午", name: "古宮博物館", type: "Sightseeing", link: "https://maps.app.goo.gl/Go5HUp6HtZwzct8W6" },
+                    { time: "下午", name: "歷史博物館", type: "Sightseeing" },
+                    { time: "晚餐", name: "계림 辣雞湯 (Gyerim)", type: "Food", notes: "地址: 서울 종로구 돈화문로4길 39", link: "https://maps.app.goo.gl/A7F8U3x5L9JpY4kC9" }
+                ]},
+                { date: "2/15 (日)", items: [
+                    { time: "上午", name: "北村逛街", type: "Activity" },
+                    { time: "下午", name: "換住宿 (遷往 Airbnb)", type: "Travel", highlight: true },
+                    { time: "下午", name: "弘大逛街", type: "Activity" },
+                    // CHANGE 4: 弘大烤鰻魚 -> 風川鰻魚-延南店
+                    { time: "晚餐", name: "풍천장어(風川鰻魚-延南店)", type: "Food", hours: "每日 11:30–22:00", address_copy: "서울 마포구 동교로27길 39" }
+                ]},
+                { date: "2/16 (一)", items: [
+                    { time: "全天", name: "包車: 南怡島, 三岳山纜車", type: "Sightseeing", highlight: true, link: "https://maps.app.goo.gl/5tY8H7kG6R9pV2wD8" }
+                ]},
+                { date: "2/17 (二)", items: [
+                    // CHANGE 5: DMZ 一日遊 - 時間 + 集合地址 + 備註
+                    { time: "07:30 - 14:30", name: "DMZ 一日遊", type: "Sightseeing", highlight: true, address_copy: "58 Mapo-daero, Mapo-gu, Seoul", notes: "6:10分首爾花園飯店(서울가든호텔)集合。集合時間為早上 6:20 於首爾花園飯店。旅遊無特殊服裝要求（建議穿著舒適鞋子）。參團須攜帶護照（美軍身分證或 ARC 亦可）。請準時（請至少提早 5 分鐘到達。巴士將準時發車，不會等候遲到者）。" }
+                ]},
+                { date: "2/18 (三)", items: [
+                    // CHANGE 6: 望遠市場 - Google Map Link 更新
+                    { time: "上午", name: "望遠市場", type: "Activity", link: "https://maps.app.goo.gl/45jDJ58foJvAi8tWA" },
+                    { time: "下午", name: "首爾站樂天超市", type: "Shopping" }
+                ]},
+                { date: "2/19 (四)", items: [
+                    { time: "全天", name: "包車: 大關嶺 三養牧場, 韓國江原道月精寺", type: "Sightseeing", highlight: true, link: "https://maps.app.goo.gl/H5J8K7oL6M2nT4xP9" }
+                ]},
+                { date: "2/20 (五)", items: [
+                    { time: "全天", name: "自由活動", type: "Activity" }
+                ]},
+                { date: "2/21 (六)", items: [
+                    { time: "09:00", name: "退房並前往仁川機場", type: "Travel", highlight: true, notes: "CI165 12:00 起飛，請預留充足時間辦理登機手續" },
+                    { time: "12:00", name: "華航CI165 仁川-高雄", type: "Travel", highlight: true }
+                ]},
+            ],
+            guide_spots: [
+                { name: "景福宮", intro: "景福宮是朝鮮王朝（1392-1897年）的正宮，意為「大吉大利、福祿綿長」。它建於1395年，是韓國五大宮궐中規模最大、建築設計最精美的。最著名的勤政殿是用於國家儀式和接見外國使節的地方，而香遠亭則是湖畔的優美亭閣。冷知識：在日治時期，宮殿的大部分被毀損，現今所見是多年來修復的結果，體現了韓國對歷史的堅守與復興。", map: { lat: 37.58, lng: 126.98 } },
+                { name: "DMZ 非軍事區", intro: "DMZ（Demilitarized Zone）是分隔南北韓的緩衝區，長約250公里，寬約4公里。雖然名為非軍事區，但它是世界上軍事化程度最高的地區之一。這裏同時也是一個生態天堂，因為人類活動的限制，成為了許多珍稀野生動植物的棲息地。參觀行程通常包括板門店、第三地道和都羅展望台。冷知識：DMZ 內部有一個名為「和平之村」（大成洞）的村莊，是唯一允許平民居住在DMZ內的特例。", map: { lat: 37.93, lng: 126.70 } },
+            ]
+        };
+
+        // 初始清單數據
+        const initialChecklist = [
+            { id: 1, text: "護照", checked: false },
+            { id: 2, text: "esim (或實體 SIM 卡)", checked: false },
+            { id: 3, text: "台幣 (用於換韓幣)", checked: false },
+            { id: 4, text: "羽絨外套", checked: false },
+            { id: 5, text: "貼身保暖衣物 (發熱衣)", checked: false },
+            { id: 6, text: "帽子, 手套", checked: false },
+            { id: 7, text: "旅遊常備藥 (感冒、腸胃藥)", checked: false },
+            { id: 8, text: "保健食品", checked: false },
+            { id: 9, text: "個人盥洗用品", checked: false },
+            { id: 10, text: "化妝品, 保養品, 卸妝", checked: false },
+            { id: 11, text: "凡士林, 唇膏, 身體乳 (韓國較乾燥)", checked: false },
+        ];
+
+
+        // --- LocalStorage 讀寫工具 ---
+        function getLocalStorage(key, defaultValue) {
+            const data = localStorage.getItem(key);
+            try {
+                return data ? JSON.parse(data) : defaultValue;
+            } catch (e) {
+                console.error(`Error parsing LocalStorage key ${key}`, e);
+                return defaultValue;
+            }
+        }
+
+        function setLocalStorage(key, value) {
+            try {
+                localStorage.setItem(key, JSON.stringify(value));
+            } catch (e) {
+                console.error(`Error setting LocalStorage key ${key}`, e);
+            }
+        }
+        
+        // --- 通用剪貼簿複製功能 ---
+        function copyTextToClipboard(text, message) {
+            try {
+                // 使用 document.execCommand('copy') 作為 iframe 環境的首選方法
+                const tempInput = document.createElement('textarea');
+                tempInput.value = text;
+                // 讓 textarea 不可見但可選中
+                tempInput.style.position = 'absolute';
+                tempInput.style.left = '-9999px';
+                document.body.appendChild(tempInput);
+                tempInput.select();
+                document.execCommand('copy');
+                document.body.removeChild(tempInput);
+                alertModal(message || '地址已成功複製到剪貼簿！');
+            } catch (err) {
+                console.error('Could not copy text: ', err);
+                alertModal('無法複製，請手動複製: ' + text);
+            }
+        }
+
+        // --- 匯率與費用計算工具 ---
+        function loadInitialData() {
+            // 加載並顯示匯率
+            currentRate = getLocalStorage(exchangeRateKey, 0.024);
+            updateRateDisplay();
+        }
+
+        function updateRateDisplay() {
+            const display = document.getElementById('current-exchange-rate');
+            if (display) {
+                display.textContent = `KRW/TWD: ${currentRate.toFixed(4)}`;
+            }
+        }
+
+        function krwToTwd(krw) {
+            return (krw * currentRate).toFixed(0);
+        }
+
+        // --- 影像壓縮與 Base64 處理 ---
+        function compressImage(file, callback) {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    const MAX_WIDTH = 300; // 縮圖最大寬度
+                    let width = img.width;
+                    let height = img.height;
+
+                    if (width > MAX_WIDTH) {
+                        height *= MAX_WIDTH / width;
+                        width = MAX_WIDTH;
+                    }
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+
+                    // 輸出為 Base64 (JPEG, 畫質 70%)
+                    const dataURL = canvas.toDataURL('image/jpeg', 0.7);
+                    callback(dataURL);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // --- 導航與內容渲染 ---
+        function changeTab(tabName) {
+            const content = document.getElementById('app-content');
+            const navItems = document.querySelectorAll('.nav-item');
+
+            // 移除舊的 active 狀態
+            navItems.forEach(item => item.classList.remove('active'));
+
+            // 設置新的 active 狀態
+            const activeNav = document.querySelector(`.nav-item[data-tab="${tabName}"]`);
+            if (activeNav) {
+                activeNav.classList.add('active');
+            }
+
+            content.innerHTML = ''; // 清空內容
+            window.scrollTo(0, 0); // 回到頂部
+
+            // 根據 tabName 渲染內容
+            switch (tabName) {
+                case 'FLIGHTS_STAY':
+                    renderFlightsStayTab(content);
+                    break;
+                case 'ITINERARY':
+                    renderItineraryTab(content);
+                    break;
+                case 'GUIDE':
+                    renderGuideTab(content);
+                    break;
+                case 'WALLET':
+                    renderWalletTab(content);
+                    break;
+                case 'LISTS':
+                    renderListsTab(content);
+                    break;
+                case 'INFO':
+                    renderInfoTab(content);
+                    break;
+            }
+        }
+        
+        // --- Tab: FLIGHTS_STAY (航班與住宿) 渲染 (不變) ---
+        function renderFlightsStayTab(container) {
+            let html = `
+                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">✈️ 航班與住宿總覽</h2>
+
+                <div class="muji-card p-4 mb-6">
+                    <h3 class="text-xl font-bold mb-3 flex items-center" style="color: var(--color-text-main);">
+                        <i class="fas fa-plane-departure mr-2 text-2xl" style="color: var(--color-accent);"></i> 出入境航班
+                    </h3>
+                    <div class="text-sm p-3 rounded" style="background-color: var(--color-bg-primary);">
+                        <p class="font-medium mb-2">${tripData.flights.split('；')[0].replace('去程：', '🛫 去程:')}</p>
+                        <p class="font-medium">${tripData.flights.split('；')[1].replace('回程：', '🛬 回程:')}</p>
+                    </div>
+                    <div class="text-xs text-gray-500 mt-3 p-2 rounded border" style="border-color: var(--color-divider);">
+                        請注意：去程CI164預計10:55抵達仁川；回程CI165為12:00起飛，請務必預留充足交通與報到時間。
+                    </div>
+                </div>
+
+                <div class="muji-card p-4 mb-6">
+                    <h3 class="text-xl font-bold mb-3 flex items-center" style="color: var(--color-text-main);">
+                        <i class="fas fa-bed mr-2 text-2xl" style="color: var(--color-accent);"></i> 住宿地點 (共 ${tripData.accommodation.length} 處)
+                    </h3>
+                    
+                    ${tripData.accommodation.map((acc, index) => `
+                        <div class="text-base mb-4 p-3 rounded-lg border-l-4" style="border-color: var(--color-highlight); background-color: var(--color-bg-primary);">
+                            <p class="font-bold text-lg mb-1" style="color: var(--color-text-main);">
+                                <span class="text-sm font-normal p-1 mr-1 rounded" style="background-color: var(--color-accent); color: white;">${acc.date}</span> ${acc.name}
+                            </p>
+                            <p class="text-sm text-gray-600">${acc.address}</p>
+                            <a href="${acc.mapLink}" target="_blank" class="muji-btn-light text-xs mt-2 px-2 py-1 inline-flex items-center hover:shadow-md">
+                                <i class="fas fa-location-dot mr-1"></i> 查看地圖 / 導航
+                            </a>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            container.innerHTML = html;
+        }
+
+        // --- Tab: ITINERARY (每日行程表) 渲染 ---
+        function renderItineraryTab(container) {
+            
+            // 根據日期取得住宿資訊
+            function getAccommodation(dateStr) {
+                // 從 "2/13 (五)" 中提取日期數字 (13)
+                const dateParts = dateStr.match(/(\d+)\/(\d+)/);
+                const dayValue = dateParts ? parseInt(dateParts[2], 10) : 0;
+                
+                // 住宿資訊索引
+                const hanokStay = tripData.accommodation[0]; // 2/13 - 2/14
+                const airbnb = tripData.accommodation[1];    // 2/15 - 2/21
+
+                if (dayValue >= 13 && dayValue <= 14) {
+                    return hanokStay;
+                } else if (dayValue >= 15 && dayValue <= 21) {
+                    return airbnb;
+                }
+                return { name: "未知住宿", address: "未知地點", mapLink: "#" };
+            }
+
+            let html = `
+                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">🗓️ 每日行程細節</h2>
+
+                <p class="text-sm mb-6 text-gray-600">行程以時間軸方式呈現，方便查看每日活動與餐廳地點。</p>
+                
+                ${tripData.itinerary.map(day => {
+                    // 取得當天住宿資訊
+                    const currentAccommodation = getAccommodation(day.date);
+
+                    // 使用新的暖黃色作為住宿背景
+                    const accommodationHtml = `
+                        <div class="mt-4 pt-4 border-t border-dashed" style="border-color: var(--color-divider);">
+                            <h5 class="text-sm font-bold p-1 rounded inline-flex items-center" style="background-color: var(--color-highlight); color: var(--color-text-main);">
+                                <i class="fas fa-bed mr-1 text-base"></i> 當晚住宿：${currentAccommodation.name}
+                            </h5>
+                            <p class="text-xs text-gray-600 mt-1">${currentAccommodation.address}</p>
+                            <a href="${currentAccommodation.mapLink}" target="_blank" class="text-xs text-blue-600 hover:text-blue-800">
+                                <i class="fas fa-location-dot mr-1"></i>查看地圖
+                            </a>
+                        </div>
+                    `;
+
+                    return `
+                        <div class="mb-8 p-3 muji-card">
+                            <h4 class="text-lg font-bold text-white p-2 rounded-t-lg mb-4" style="background-color: var(--color-accent);">
+                                ${day.date}
+                            </h4>
+                            <div class="relative pl-8">
+                                ${day.items.map((item, index) => {
+                                    // 高亮項目使用經典暖黃色
+                                    const highlightStyle = item.highlight ? `background-color: var(--color-highlight); font-weight: bold; color: var(--color-text-main);` : '';
+                                    const dotClass = item.highlight ? 'bg-red-500' : 'bg-gray-400';
+                                    
+                                    // 判斷 Naver Map 連結，優先使用自訂，其次用地址，最後用名稱搜尋
+                                    const naverLink = item.naver_link || (item.address_copy ? `https://map.naver.com/v5/search/${encodeURIComponent(item.address_copy)}` : `https://map.naver.com/v5/search/${encodeURIComponent(item.name)}`);
+
+                                    const itemLink = (item.link || item.naver_link || item.type === 'Food' || item.type === 'Activity') ? `
+                                        <div class="mt-2 flex flex-wrap gap-2">
+                                            ${item.link ? `
+                                                <a href="${item.link}" target="_blank" class="muji-btn-light text-xs px-2 py-1 flex items-center hover:shadow-md">
+                                                    <i class="fas fa-map-pin mr-1"></i> Google Map
+                                                </a>
+                                            ` : ''}
+                                            <a href="${naverLink}" target="_blank" class="muji-btn-light text-xs px-2 py-1 flex items-center hover:shadow-md">
+                                                <i class="fas fa-map mr-1"></i> Naver Map
+                                            </a>
+                                            <a href="https://www.google.com/search?q=${encodeURIComponent(item.name)} 食記" target="_blank" class="muji-btn-light text-xs px-2 py-1 flex items-center hover:shadow-md">
+                                                <i class="fas fa-utensils mr-1"></i> 食記/介紹
+                                            </a>
+                                        </div>
+                                    ` : '';
+
+                                    return `
+                                        <div class="timeline-item relative pb-6 ml-3">
+                                            <div class="timeline-dot ${dotClass} ${item.highlight ? 'ring-4' : ''}" style="border-color: var(--color-divider); background-color: ${item.highlight ? 'var(--color-text-main)' : 'var(--color-divider)'}; top: 2px; ${item.highlight ? 'box-shadow: 0 0 0 3px var(--color-highlight);' : ''}"></div>
+                                            <div class="ml-4 pl-4 border-l" style="border-color: var(--color-divider);">
+                                                <p class="text-sm font-medium p-1 rounded inline-block" style="${highlightStyle}">${item.time}</p>
+                                                <p class="text-base font-semibold mt-1" style="color: var(--color-text-main);">${item.name}</p>
+                                                <p class="text-xs text-gray-500">${item.notes || item.type}</p>
+                                                
+                                                ${item.hours || item.address_copy ? `
+                                                    <div class="mt-2 p-3 rounded-lg border-l-2" style="border-color: var(--color-accent); background-color: var(--color-bg-primary);">
+                                                        ${item.hours ? `<p class="text-xs text-gray-700 mb-1"><i class="far fa-clock mr-1 text-sm" style="color: var(--color-text-main);"></i> 營業時間: <span class="font-medium">${item.hours}</span></p>` : ''}
+                                                        ${item.address_copy ? `
+                                                            <div class="mt-2 pt-2 border-t border-dashed" style="border-color: var(--color-divider);">
+                                                                <p class="text-xs font-medium mb-1" style="color: var(--color-text-main);">地址 (一鍵複製):</p>
+                                                                <div class="flex items-center space-x-2">
+                                                                    <p class="text-xs text-gray-600 font-mono break-all flex-1">${item.address_copy}</p>
+                                                                    <button onclick="copyTextToClipboard(this.previousElementSibling.textContent)" class="muji-btn-light text-xs px-2 py-1 flex items-center shrink-0 hover:shadow-md">
+                                                                        <i class="fas fa-copy"></i>
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        ` : ''}
+                                                    </div>
+                                                ` : ''}
+
+                                                ${itemLink}
+                                            </div>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                            ${accommodationHtml}
+                        </div>
+                    `;
+                }).join('')}
+            `;
+            container.innerHTML = html;
+        }
+
+        // --- Tab: GUIDE (深度導覽) 渲染 (不變) ---
+        function renderGuideTab(container) {
+            let html = `
+                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">📖 深度導覽與旅遊手冊</h2>
+                <p class="text-sm mb-6 text-gray-600">提供重點景點的歷史背景與冷知識，排版模擬雜誌風格，讓閱讀更輕鬆。</p>
+                
+                ${tripData.guide_spots.map((spot, index) => `
+                    <div class="muji-card p-5 mb-8">
+                        <div class="flex items-center mb-4">
+                            <span class="text-3xl font-serif text-white px-3 py-1 mr-3 rounded" style="background-color: var(--color-accent);">
+                                ${index + 1}
+                            </span>
+                            <h3 class="text-xl font-bold" style="color: var(--color-text-main);">${spot.name}</h3>
+                        </div>
+
+                        <div class="p-4 rounded border-l-4" style="background-color: var(--color-bg-primary); border-color: var(--color-divider);">
+                            <p class="text-sm italic mb-3" style="color: var(--color-text-main);">#歷史與文化</p>
+                            <p class="text-base whitespace-pre-wrap text-gray-700">${spot.intro}</p>
+                        </div>
+                        
+                        <h4 class="text-lg font-semibold mt-6 mb-3" style="color: var(--color-text-main);">地圖位置 (OpenStreetMap)</h4>
+                        <div class="aspect-video overflow-hidden rounded-lg border" style="border-color: var(--color-divider); box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06);">
+                            <iframe 
+                                width="100%" 
+                                height="100%" 
+                                frameborder="0" 
+                                scrolling="no" 
+                                marginheight="0" 
+                                marginwidth="0" 
+                                src="https://www.openstreetmap.org/export/embed.html?bbox=${spot.map.lng - 0.005}%2C${spot.map.lat - 0.003}%2C${spot.map.lng + 0.005}%2C${spot.map.lat + 0.003}&layer=mapnik&marker=${spot.map.lat}%2C${spot.map.lng}" 
+                                style="border: 0;">
+                            </iframe>
+                            <small>
+                                <a href="https://www.openstreetmap.org/?mlat=${spot.map.lat}&mlon=${spot.map.lng}#map=16/${spot.map.lat}/${spot.map.lng}" target="_blank" class="text-xs text-gray-500 block text-right mt-1">查看大圖</a>
+                            </small>
+                        </div>
+                    </div>
+                `).join('')}
+            `;
+            container.innerHTML = html;
+        }
+
+
+        // --- Tab: WALLET (記帳與匯率) 渲染 (不變) ---
+        function renderWalletTab(container) {
+            // 載入記帳資料
+            let expenses = getLocalStorage(expensesKey, []);
+
+            let html = `
+                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💰 記帳與匯率中心</h2>
+
+                <div class="muji-card p-4 mb-6">
+                    <h3 class="text-lg font-semibold mb-3" style="color: var(--color-text-main);">匯率換算機</h3>
+                    <div class="flex space-x-2 mb-3">
+                        <input type="number" id="rate-input" value="${currentRate.toFixed(4)}" step="0.0001" class="w-1/3 p-2 border rounded-lg focus:ring-1 focus:ring-red-300" placeholder="0.024" style="border-color: var(--color-divider); color: var(--color-text-main);">
+                        <button id="set-rate-btn" class="muji-btn text-sm w-2/3">設定當前 KRW/TWD 匯率</button>
+                    </div>
+
+                    <div class="grid grid-cols-4 gap-2 p-3 rounded-lg" style="background-color: var(--color-bg-primary);">
+                        <input type="text" id="calc-display" class="col-span-4 text-right text-2xl p-2 mb-2 rounded border font-mono bg-white" value="0" readonly style="border-color: var(--color-divider);">
+                        <div id="calc-result" class="col-span-4 text-right text-sm text-gray-500">
+                            ${TWD_SYMBOL} <span id="calc-twd-result">0</span>
+                        </div>
+                        
+                        <button class="calc-btn muji-btn-light text-xl" data-value="C" style="background-color: var(--color-divider);">C</button>
+                        <button class="calc-btn muji-btn-light text-xl" data-value="back"><i class="fas fa-backspace"></i></button>
+                        <button class="calc-btn muji-btn-light text-xl" data-value="/">÷</button>
+                        <button class="calc-btn muji-btn-light text-xl" data-value="*">×</button>
+
+                        <button class="calc-btn muji-btn text-xl" data-value="7">7</button>
+                        <button class="calc-btn muji-btn text-xl" data-value="8">8</button>
+                        <button class="calc-btn muji-btn text-xl" data-value="9">9</button>
+                        <button class="calc-btn muji-btn-light text-xl" data-value="-">−</button>
+
+                        <button class="calc-btn muji-btn text-xl" data-value="4">4</button>
+                        <button class="calc-btn muji-btn text-xl" data-value="5">5</button>
+                        <button class="calc-btn muji-btn text-xl" data-value="6">6</button>
+                        <button class="calc-btn muji-btn-light text-xl" data-value="+">&plus;</button>
+
+                        <button class="calc-btn muji-btn text-xl" data-value="1">1</button>
+                        <button class="calc-btn muji-btn text-xl" data-value="2">2</button>
+                        <button class="calc-btn muji-btn text-xl" data-value="3">3</button>
+                        <button class="calc-btn muji-btn-light text-xl row-span-2" data-value="=">=</button>
+
+                        <button class="calc-btn muji-btn text-xl" data-value="00">00</button>
+                        <button class="calc-btn muji-btn text-xl" data-value="0">0</button>
+                        <button class="calc-btn muji-btn text-xl" data-value=".">.</button>
+                    </div>
+                </div>
+
+                <div class="muji-card p-4 mb-6">
+                    <h3 class="text-lg font-semibold mb-3" style="color: var(--color-text-main);">新增一筆開銷</h3>
+                    <input type="text" id="expense-item" class="w-full p-2 mb-2 border rounded-lg" placeholder="品項名稱 (e.g. 午餐、咖啡)" style="border-color: var(--color-divider);">
+                    <input type="number" id="expense-krw" class="w-full p-2 mb-2 border rounded-lg" placeholder="韓幣金額 (KRW)" style="border-color: var(--color-divider);">
+                    
+                    <label class="block text-sm font-medium mb-2" style="color: var(--color-text-main);">上傳或拍照 (壓縮為縮圖)</label>
+                    <input type="file" id="expense-photo" accept="image/*" class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold" style="--file-bg: var(--color-accent); --file-text: var(--color-text-main);" onMouseOver="this.style.backgroundColor='var(--color-highlight)'" onMouseOut="this.style.backgroundColor='var(--color-bg-primary)'">
+                    <div id="photo-preview" class="mt-2 text-center text-sm text-gray-400">（圖片壓縮後不會佔用太多容量）</div>
+
+                    <button id="add-expense-btn" class="muji-btn w-full mt-4">紀錄開銷</button>
+                </div>
+
+                <h3 class="text-xl font-bold mb-3" style="color: var(--color-text-main);">📜 記帳歷史</h3>
+                <div id="expense-list-container">
+                    ${expenses.length === 0 ? '<p class="text-center text-gray-500 p-4">目前沒有記帳紀錄。</p>' : ''}
+                </div>
+            `;
+            container.innerHTML = html;
+            setupWalletListeners();
+            renderExpenseList();
+        }
+
+        // 渲染記帳歷史列表 (不變)
+        function renderExpenseList() {
+            const container = document.getElementById('expense-list-container');
+            let expenses = getLocalStorage(expensesKey, []);
+
+            if (!container) return;
+
+            if (expenses.length === 0) {
+                container.innerHTML = '<p class="text-center text-gray-500 p-4">目前沒有記帳紀錄。</p>';
+                return;
+            }
+
+            // 計算總額
+            const totalKRW = expenses.reduce((sum, exp) => sum + exp.krw, 0);
+            const totalTWD = krwToTwd(totalKRW);
+
+            let listHtml = `
+                <div class="muji-card p-4 mb-4 text-center" style="background-color: var(--color-highlight); border-color: var(--color-accent);">
+                    <p class="text-lg font-bold" style="color: var(--color-text-main);">總計花費</p>
+                    <p class="text-2xl font-bold my-1" style="color: var(--color-text-main);">${totalKRW.toLocaleString()} KRW</p>
+                    <p class="text-md text-gray-500">約 ${TWD_SYMBOL} ${totalTWD.toLocaleString()} TWD</p>
+                </div>
+
+                <div class="space-y-3">
+                    ${expenses.reverse().map(exp => `
+                        <div class="muji-card p-3 flex items-center justify-between border" style="border-color: var(--color-divider);">
+                            <div class="flex items-center space-x-3 w-3/4">
+                                ${exp.photo ? `<img src="${exp.photo}" alt="收據縮圖" class="w-12 h-12 object-cover rounded-md border" style="border-color: var(--color-divider);">` : `<div class="w-12 h-12 flex items-center justify-center bg-gray-100 rounded-md text-gray-400" style="background-color: var(--color-bg-primary);"><i class="fas fa-image"></i></div>`}
+                                <div class="truncate">
+                                    <p class="font-medium truncate" style="color: var(--color-text-main);">${exp.item}</p>
+                                    <p class="text-xs text-gray-500">${new Date(exp.timestamp).toLocaleDateString()} ${new Date(exp.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                                </div>
+                            </div>
+                            <div class="text-right w-1/4">
+                                <p class="text-sm font-semibold" style="color: var(--color-text-main);">${exp.krw.toLocaleString()} KRW</p>
+                                <p class="text-xs text-gray-500">${TWD_SYMBOL} ${krwToTwd(exp.krw)}</p>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            container.innerHTML = listHtml;
+        }
+
+        // 設置 Wallet Tab 的事件監聽器 (不變)
+        function setupWalletListeners() {
+            // --- 匯率設定 ---
+            document.getElementById('set-rate-btn').addEventListener('click', () => {
+                const input = document.getElementById('rate-input');
+                const newRate = parseFloat(input.value);
+                if (newRate > 0) {
+                    currentRate = newRate;
+                    setLocalStorage(exchangeRateKey, newRate);
+                    updateRateDisplay();
+                    renderExpenseList(); // 重新渲染列表以更新台幣金額
+                } else {
+                    alertModal("請輸入有效的匯率。");
+                }
+            });
+
+            // --- 計算機邏輯 ---
+            const display = document.getElementById('calc-display');
+            const twdResult = document.getElementById('calc-twd-result');
+            const buttons = document.querySelectorAll('.calc-btn');
+
+            buttons.forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const value = e.currentTarget.dataset.value;
+                    let current = display.value === '0' ? '' : display.value;
+
+                    try {
+                        if (value === 'C') {
+                            display.value = '0';
+                        } else if (value === 'back') {
+                            display.value = current.length > 1 ? current.slice(0, -1) : '0';
+                        } else if (value === '=') {
+                            // 僅允許數字和基本運算符號
+                            const safeExpression = current.replace(/[^-()\d/*+. ]/g, '');
+                            const krwTotal = eval(safeExpression);
+                            if (isNaN(krwTotal) || !isFinite(krwTotal)) throw new Error('Invalid calculation');
+                            
+                            display.value = Math.floor(krwTotal).toString(); // 結果取整數 (韓幣無小數)
+                        } else {
+                            if (current === '0' && value !== '.') current = '';
+                            display.value = current + value;
+                        }
+                        
+                        // 即時計算 KRW 總額並換算 TWD
+                        let krwAmount = 0;
+                        try {
+                            const safeExpression = display.value.replace(/[^-()\d/*+. ]/g, '');
+                            krwAmount = eval(safeExpression) || 0;
+                        } catch (e) {
+                            krwAmount = 0;
+                        }
+
+                        twdResult.textContent = krwToTwd(Math.floor(krwAmount));
+
+                    } catch (e) {
+                        display.value = 'Error';
+                        twdResult.textContent = '0';
+                        console.error('Calculator error:', e);
+                    }
+                });
+            });
+
+            // --- 記帳功能 ---
+            const photoInput = document.getElementById('expense-photo');
+            let base64Photo = null;
+
+            photoInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    compressImage(file, (dataURL) => {
+                        base64Photo = dataURL;
+                        const preview = document.getElementById('photo-preview');
+                        preview.innerHTML = `<img src="${dataURL}" class="w-20 h-20 object-cover mx-auto rounded-md mt-2 border" style="border-color: var(--color-divider);">`;
+                    });
+                }
+            });
+
+            document.getElementById('add-expense-btn').addEventListener('click', () => {
+                const itemInput = document.getElementById('expense-item');
+                const krwInput = document.getElementById('expense-krw');
+
+                const item = itemInput.value.trim();
+                const krw = parseInt(krwInput.value, 10);
+
+                if (!item || isNaN(krw) || krw <= 0) {
+                    alertModal("請輸入有效的品項名稱和韓幣金額。");
+                    return;
+                }
+
+                const newExpense = {
+                    id: Date.now(),
+                    item: item,
+                    krw: krw,
+                    photo: base64Photo,
+                    timestamp: new Date().toISOString()
+                };
+
+                let expenses = getLocalStorage(expensesKey, []);
+                expenses.push(newExpense);
+                setLocalStorage(expensesKey, expenses);
+
+                // 清空表單
+                itemInput.value = '';
+                krwInput.value = '';
+                photoInput.value = null; // 清空檔案輸入
+                document.getElementById('photo-preview').innerHTML = '（圖片壓縮後不會佔用太多容量）';
+                base64Photo = null;
+
+                renderExpenseList();
+            });
+        }
+
+
+        // --- Tab: LISTS (清單) 渲染 (不變) ---
+        function renderListsTab(container) {
+            // 載入清單和備忘錄
+            const checklist = getLocalStorage(checklistKey, initialChecklist);
+            const memoText = getLocalStorage(memoKey, "歡迎使用備忘錄！可以在這裡記錄網址，會自動轉換成連結按鈕。\n\n例如：\nNaver 地圖: https://map.naver.com/");
+
+            let html = `
+                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">📝 行前清單與備忘錄</h2>
+
+                <div class="muji-card p-4 mb-8">
+                    <h3 class="text-lg font-semibold mb-3 border-b pb-2" style="color: var(--color-text-main); border-color: var(--color-divider);">行前準備 CheckList</h3>
+                    <div id="checklist-container" class="space-y-2">
+                        </div>
+                </div>
+
+                <div class="muji-card p-4">
+                    <h3 class="text-lg font-semibold mb-3 border-b pb-2" style="color: var(--color-text-main); border-color: var(--color-divider);">個人備忘錄</h3>
+                    <textarea id="memo-input" class="w-full p-3 h-40 border rounded-lg focus:ring-1 focus:ring-red-300 text-sm" placeholder="輸入您的備忘內容..." style="border-color: var(--color-divider); color: var(--color-text-main);">${memoText}</textarea>
+                    <button id="save-memo-btn" class="muji-btn w-full mt-3">儲存備忘錄</button>
+                    <div class="mt-4 p-3 rounded-lg" id="memo-output" style="background-color: var(--color-bg-primary);">
+                        <h4 class="font-medium mb-2" style="color: var(--color-text-main);">連結預覽 (自動轉換)</h4>
+                        </div>
+                </div>
+            `;
+            container.innerHTML = html;
+            setupListsListeners(checklist, memoText);
+        }
+
+        // 渲染 CheckList 項目 (不變)
+        function renderChecklist(checklist) {
+            const container = document.getElementById('checklist-container');
+            if (!container) return;
+
+            container.innerHTML = checklist.map(item => `
+                <div class="flex items-center p-2 rounded hover:bg-gray-50 transition duration-150">
+                    <input type="checkbox" id="check-${item.id}" data-id="${item.id}" class="h-5 w-5 border-gray-300 rounded focus:ring-red-500" style="color: var(--color-text-main); border-color: var(--color-divider);" ${item.checked ? 'checked' : ''}>
+                    <label for="check-${item.id}" class="ml-3 text-sm flex-1 ${item.checked ? 'line-through text-gray-500' : 'text-gray-800'}" style="color: ${item.checked ? 'gray' : 'var(--color-text-main)'};">
+                        ${item.text}
+                    </label>
+                </div>
+            `).join('');
+        }
+        
+        // 渲染備忘錄輸出 (自動轉換連結) (不變)
+        function renderMemoOutput(memoText) {
+            const outputDiv = document.getElementById('memo-output');
+            if (!outputDiv) return;
+
+            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            const lines = memoText.split('\n');
+            
+            let outputHtml = '<h4 class="font-medium mb-2" style="color: var(--color-text-main);">連結預覽 (自動轉換)</h4><div class="space-y-2">';
+
+            lines.forEach(line => {
+                const matches = line.match(urlRegex);
+                if (matches) {
+                    matches.forEach(url => {
+                        const linkName = line.replace(url, '').trim() || url;
+                        outputHtml += `
+                            <a href="${url}" target="_blank" class="muji-btn-light w-full text-left flex items-center justify-between text-sm" style="border-color: var(--color-divider); background-color: white;">
+                                <span><i class="fas fa-link mr-2"></i> ${linkName}</span>
+                                <i class="fas fa-external-link-alt text-xs"></i>
+                            </a>
+                        `;
+                    });
+                }
+            });
+
+            if (outputHtml === '<h4 class="font-medium mb-2" style="color: var(--color-text-main);">連結預覽 (自動轉換)</h4><div class="space-y-2">') {
+                outputHtml += '<p class="text-sm text-gray-400">沒有偵測到可轉換的網址連結。</p>';
+            }
+
+            outputHtml += '</div>';
+            outputDiv.innerHTML = outputHtml;
+        }
+
+        // 設置 Lists Tab 的事件監聽器 (不變)
+        function setupListsListeners(checklist, memoText) {
+            // 1. CheckList 渲染與事件
+            renderChecklist(checklist);
+
+            document.getElementById('checklist-container').addEventListener('change', (e) => {
+                if (e.target.type === 'checkbox') {
+                    const id = parseInt(e.target.dataset.id, 10);
+                    const updatedChecklist = getLocalStorage(checklistKey, initialChecklist).map(item => {
+                        if (item.id === id) {
+                            item.checked = e.target.checked;
+                        }
+                        return item;
+                    });
+                    setLocalStorage(checklistKey, updatedChecklist);
+                    renderChecklist(updatedChecklist); // 重新渲染以更新樣式
+                }
+            });
+
+            // 2. Memo 渲染與事件
+            renderMemoOutput(memoText);
+
+            document.getElementById('save-memo-btn').addEventListener('click', () => {
+                const input = document.getElementById('memo-input');
+                const newMemoText = input.value;
+                setLocalStorage(memoKey, newMemoText);
+                renderMemoOutput(newMemoText);
+                alertModal("備忘錄已儲存。");
+            });
+        }
+
+
+        // --- Tab: INFO (資訊) 渲染 (不變) ---
+        function renderInfoTab(container) {
+            let html = `
+                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💡 旅遊實用資訊</h2>
+
+                <div class="muji-card p-4 mb-6">
+                    <h3 class="text-lg font-semibold mb-3 border-b pb-2" style="color: var(--color-text-main); border-color: var(--color-divider);">當地資訊連結</h3>
+                    <div class="space-y-3">
+                        <a href="https://weather.com/zh-TW/weather/today/l/KSXX0037:1:KS" target="_blank" class="muji-btn-light w-full flex items-center justify-between" style="border-color: var(--color-divider); background-color: var(--color-bg-primary);">
+                            <span><i class="fas fa-cloud-sun mr-2"></i> 首爾當地天氣預報</span>
+                            <i class="fas fa-external-link-alt text-xs"></i>
+                        </a>
+                    </div>
+
+                    <h3 class="text-lg font-semibold mt-6 mb-3 border-b pb-2" style="color: var(--color-text-main); border-color: var(--color-divider);">緊急聯絡資訊</h3>
+                    <div class="space-y-3">
+                        <div class="flex justify-between items-center p-2 border-b" style="border-color: var(--color-divider);">
+                            <span class="font-medium text-red-600"><i class="fas fa-house-medical mr-2"></i> 救護車/急診</span>
+                            <span class="font-bold text-lg" style="color: var(--color-text-main);">119</span>
+                        </div>
+                        <div class="flex justify-between items-center p-2 border-b" style="border-color: var(--color-divider);">
+                            <span class="font-medium text-blue-600"><i class="fas fa-user-shield mr-2"></i> 警察</span>
+                            <span class="font-bold text-lg" style="color: var(--color-text-main);">112</span>
+                        </div>
+                        <div class="p-2 border rounded-lg" style="background-color: var(--color-bg-primary); border-color: var(--color-divider);">
+                            <p class="font-medium" style="color: var(--color-text-main);">駐韓國臺北代表部</p>
+                            <p class="text-sm text-gray-600">地址：首爾市鍾路區世宗大路 149 光化門大廈 6 樓</p>
+                            <p class="text-sm text-gray-600">急難救助電話：<a href="tel:+82-2-399-2782" class="text-blue-600 hover:underline">+82-2-399-2782</a></p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="muji-card p-4">
+                    <h3 class="text-lg font-semibold mb-3 border-b pb-2" style="color: var(--color-text-main); border-color: var(--color-divider);">⚠️ 旅遊禁忌與注意事項</h3>
+                    <ul class="text-sm space-y-2 list-disc list-inside text-gray-600">
+                        <li><span class="font-medium" style="color: var(--color-text-main);">出入境違禁品：</span>嚴禁攜帶肉類、生鮮產品入境。部分藥品如含有麻醉或管制成分需申報。</li>
+                        <li><span class="font-medium" style="color: var(--color-text-main);">餐飲禮儀：</span>用餐時，將碗碟留在桌上，不捧起飯碗或湯碗。不可用筷子指人。</li>
+                        <li><span class="font-medium" style="color: var(--color-text-main);">長幼尊卑：</span>向年長者遞物或接物時，應雙手進行，以示尊重。</li>
+                        <li><span class="font-medium" style="color: var(--color-text-main);">公共交通：</span>在地鐵或公車上應為老人、孕婦讓座，韓國社會對此非常重視。</li>
+                        <li><span class="font-medium" style="color: var(--color-text-main);">韓屋住宿：</span>在傳統韓屋內需脫鞋，注意保持安靜，以維護環境。</li>
+                    </ul>
+                </div>
+            `;
+            container.innerHTML = html;
+        }
+        
+        // --- Custom Alert Modal (取代 alert()) ---
+        function alertModal(message) {
+            let modal = document.getElementById('custom-alert-modal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'custom-alert-modal';
+                modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-30 p-4 hidden';
+                modal.innerHTML = `
+                    <div class="muji-card p-6 w-full max-w-xs text-center" style="border-color: var(--color-divider);">
+                        <p class="text-lg font-medium mb-4" id="alert-message" style="color: var(--color-text-main);"></p>
+                        <button id="alert-close-btn" class="muji-btn w-full">確認</button>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+                document.getElementById('alert-close-btn').onclick = () => {
+                    modal.classList.add('hidden');
+                };
+            }
+            document.getElementById('alert-message').textContent = message;
+            modal.classList.remove('hidden');
+        }
+
+        // --- 初始化與事件綁定 ---
+        document.addEventListener('DOMContentLoaded', () => {
+            loadInitialData(); // 加載匯率
+
+            // 初始載入 FLIGHTS_STAY tab (新的首頁)
+            changeTab('FLIGHTS_STAY');
+
+            // 綁定底部導航列事件
+            document.querySelectorAll('.nav-item').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const tab = e.currentTarget.dataset.tab;
+                    changeTab(tab);
+                });
+            });
+            
+            // 初始化 LocalStorage 預設值 (如果沒有的話)
+            if (!localStorage.getItem(checklistKey)) {
+                setLocalStorage(checklistKey, initialChecklist);
+            }
+        });
+
+    </script>
+</body>
+</html>
