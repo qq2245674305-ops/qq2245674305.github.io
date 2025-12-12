@@ -18,7 +18,11 @@
             --color-divider: #eac9b8; /* 柔和粉色 (Soft Divider/Border) */
             --color-highlight: #F8D77A; /* 經典暖黃 (Highlight/Important Time) */
         }
-
+        /* 新增：下午時段的背景顏色 */
+        .afternoon-theme {
+            background-color: #F7EFE8; /* 淺米白/粉色，區隔下午時段 */
+        }
+        
         body {
             font-family: 'Noto Sans TC', sans-serif;
             background-color: var(--color-bg-primary);
@@ -103,7 +107,7 @@
     <footer class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-30">
         <nav class="flex justify-around items-center h-16 max-w-xl mx-auto">
             <button class="nav-item flex flex-col items-center p-2 active" data-tab="FLIGHTS_STAY">
-                <i class="fas fa-plane text-xl"></i>
+                <i class="fas fa-plane-departure text-xl"></i>
                 <span class="text-xs mt-1">航班住宿</span>
             </button>
             <button class="nav-item flex flex-col items-center p-2" data-tab="ITINERARY">
@@ -136,11 +140,13 @@
         const expensesKey = `${APP_ID}_EXPENSES`;
         const checklistKey = `${APP_ID}_CHECKLIST`;
         const memoKey = `${APP_ID}_MEMO`;
+        // 新增：使用者自訂行程的 Key
+        const userItineraryKey = `${APP_ID}_USER_ITINERARY`; 
 
         let currentRate = 0.024; // 預設韓元到台幣匯率 (可調整)
         const TWD_SYMBOL = 'NT$';
 
-        // 核心行程數據 - 已更新航班與餐廳資訊，並加入營業時間與地址
+        // 核心行程數據 - 已更新
         const tripData = {
             flights: "去程：2026/2/13 華航CI164 高雄-仁川 (07:10 - 10:55)；回程：2026/2/21 華航CI165 仁川-高雄 (12:00 - 14:10)",
             accommodation: [
@@ -151,13 +157,16 @@
             ],
             itinerary: [
                 { date: "2/13 (五)", items: [
-                    { time: "中午前", name: "抵達仁川、包車至住宿點", type: "Travel", highlight: true, notes: "CI164 預計 10:55 抵達，直接搭車前往市區" },
-                    // UPDATED 1: 北村大瓦房醬蟹
+                    // === UPDATED FLIGHT & TRANSFER NOTES ===
+                    { time: "7:05~10:55", name: "高雄-仁川 CI164 (二航廈)", type: "Travel", highlight: true, notes: "CI164 預計 10:55 抵達，請依指示領取行李。" },
+                    { time: "11:00", name: "包車至住宿點", type: "Travel", highlight: true, notes: "根據航班實際到達時間，有最長90分鐘的免費等待時間。*如果90分鐘後領取，即使不足30分鐘，也以30分鐘計算。請直接以現金支付10,000韓元/30分鐘的額外費用給司機。" },
+                    // 午餐
                     { time: "午餐", name: "큰기와집(大瓦房醬蟹-北村)", type: "Food", notes: "米其林一星", link: "https://maps.app.goo.gl/cnKvroKdRau3itxz5", hours: "每日 12:00–21:00 (平日休息 15:00–17:00)", address_copy: "서울 종로구 북촌로 22 1층" },
-                    // UPDATED 2: 明洞大使館換錢
-                    { time: "下午", name: "대사관앞환전 (明洞大使館換錢)", type: "Activity", hours: "每日 09:00–20:00", address_copy: "서울 중구 명동2길 26" },
-                    { time: "下午", name: "明洞逛街", type: "Activity" },
-                    // UPDATED 3: 朝朝刀削麵
+                    // === NEW GROUP HEADER AND THEMED ITEMS FOR AFTERNOON ===
+                    { time: "下午", name: "明洞逛街", type: "GroupHeader", theme: "afternoon" },
+                    { time: "下午", name: "대사관앞환전 (明洞大使館換錢)", type: "Activity", theme: "afternoon", hours: "每日 09:00–20:00", address_copy: "서울 중구 명동2길 26" },
+                    { time: "下午", name: "周邊活動/逛街", type: "Activity", theme: "afternoon" },
+                    // 晚餐
                     { time: "晚餐", name: "조조칼국수 시청점 (朝朝刀削麵 市政廳店)", type: "Food", link: "https://maps.app.goo.gl/3A2X4Y8k2T5eP8wQ7", hours: "每日 11:00–21:00 (休息時間 15:00–17:00)", address_copy: "27 Sejong-daero 11-gil, Jung District, Seoul, 南韓" }
                 ]},
                 { date: "2/14 (六)", items: [
@@ -390,18 +399,16 @@
             container.innerHTML = html;
         }
 
-        // --- Tab: ITINERARY (每日行程表) 渲染 ---
+        // --- Tab: ITINERARY (每日行程表) 渲染 (已新增新增功能與分組邏輯) ---
         function renderItineraryTab(container) {
             
-            // 根據日期取得住宿資訊
+            // 1. 取得當天住宿資訊
             function getAccommodation(dateStr) {
-                // 從 "2/13 (五)" 中提取日期數字 (13)
                 const dateParts = dateStr.match(/(\d+)\/(\d+)/);
                 const dayValue = dateParts ? parseInt(dateParts[2], 10) : 0;
                 
-                // 住宿資訊索引
-                const hanokStay = tripData.accommodation[0]; // 2/13 - 2/14
-                const airbnb = tripData.accommodation[1];    // 2/15 - 2/21
+                const hanokStay = tripData.accommodation[0];
+                const airbnb = tripData.accommodation[1];
 
                 if (dayValue >= 13 && dayValue <= 14) {
                     return hanokStay;
@@ -411,16 +418,54 @@
                 return { name: "未知住宿", address: "未知地點", mapLink: "#" };
             }
 
+            // 2. 載入並合併使用者自訂行程
+            const userItems = getLocalStorage(userItineraryKey, []);
+
+            const combinedItinerary = tripData.itinerary.map(day => {
+                const dayUserItems = userItems.filter(item => item.date === day.date);
+                
+                // 合併預設行程和使用者行程，並排序
+                const combinedItems = [...day.items, ...dayUserItems].sort((a, b) => {
+                    // 簡單排序：將時間轉換為可比較的字串
+                    let timeA = a.time.replace(/[^0-9:]/g, '');
+                    let timeB = b.time.replace(/[^0-9:]/g, '');
+
+                    // 將非數字時間 (如 '午餐', '下午') 放在最後
+                    if (!/\d/.test(timeA)) timeA = 'zzzz';
+                    if (!/\d/.test(timeB)) timeB = 'zzzz';
+                    
+                    return timeA.localeCompare(timeB);
+                });
+
+                return { ...day, items: combinedItems };
+            });
+
+            // 3. 渲染 HTML
             let html = `
                 <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">🗓️ 每日行程細節</h2>
 
+                <div class="muji-card p-4 mb-6" style="border-color: var(--color-accent); border-left-width: 4px;">
+                    <h3 class="text-lg font-bold mb-3 flex items-center" style="color: var(--color-text-main);">
+                        <i class="fas fa-cart-shopping mr-2 text-xl" style="color: var(--color-accent);"></i> 新增逛街/自訂行程
+                    </h3>
+                    <select id="new-item-date" class="w-full p-2 mb-2 border rounded-lg text-sm" style="border-color: var(--color-divider);">
+                        ${tripData.itinerary.map(day => `<option value="${day.date}">${day.date}</option>`).join('')}
+                    </select>
+                    <input type="text" id="new-item-name" class="w-full p-2 mb-2 border rounded-lg text-sm font-semibold" placeholder="行程標題 (必填，如：弘大Line Friends)" style="border-color: var(--color-divider);">
+                    <input type="text" id="new-item-address" class="w-full p-2 mb-2 border rounded-lg text-sm" placeholder="詳細地址 (必填，方便導航)" style="border-color: var(--color-divider);">
+                    <input type="text" id="new-item-description" class="w-full p-2 mb-2 border rounded-lg text-sm" placeholder="簡短介紹/備註" style="border-color: var(--color-divider);">
+                    
+                    <input type="text" id="new-item-time" class="w-full p-2 mb-2 border rounded-lg text-sm" placeholder="時間 (選填，如：14:00 或 '下午')" style="border-color: var(--color-divider);">
+
+                    <button id="add-itinerary-btn" class="muji-btn w-full mt-2">新增到行程表</button>
+                </div>
+
+
                 <p class="text-sm mb-6 text-gray-600">行程以時間軸方式呈現，方便查看每日活動與餐廳地點。</p>
                 
-                ${tripData.itinerary.map(day => {
-                    // 取得當天住宿資訊
+                ${combinedItinerary.map(day => {
                     const currentAccommodation = getAccommodation(day.date);
 
-                    // 使用新的暖黃色作為住宿背景
                     const accommodationHtml = `
                         <div class="mt-4 pt-4 border-t border-dashed" style="border-color: var(--color-divider);">
                             <h5 class="text-sm font-bold p-1 rounded inline-flex items-center" style="background-color: var(--color-highlight); color: var(--color-text-main);">
@@ -440,11 +485,30 @@
                             </h4>
                             <div class="relative pl-8">
                                 ${day.items.map((item, index) => {
-                                    // 高亮項目使用經典暖黃色
-                                    const highlightStyle = item.highlight ? `background-color: var(--color-highlight); font-weight: bold; color: var(--color-text-main);` : '';
-                                    const dotClass = item.highlight ? 'bg-red-500' : 'bg-gray-400';
                                     
-                                    // 判斷 Naver Map 連結，優先使用自訂，其次用地址，最後用名稱搜尋
+                                    const isGroupHeader = item.type === 'GroupHeader';
+                                    const isAfternoon = item.theme === 'afternoon';
+                                    const isUserAdded = item.isUserAdded;
+
+                                    // 處理 GroupHeader 樣式 (大標題/分組標題)
+                                    if (isGroupHeader) {
+                                        return `<div class="p-2 mb-4 mt-2 rounded font-bold text-lg border-b border-dashed" style="background-color: ${isAfternoon ? '#F7EFE8' : 'var(--color-bg-primary)'}; color: var(--color-text-main); border-color: var(--color-divider);"><i class="fas fa-thumbtack mr-2"></i> ${item.name}</div>`;
+                                    }
+
+                                    // 項目背景樣式
+                                    const itemBgClass = isAfternoon ? 'afternoon-theme' : '';
+                                    
+                                    // 時間標籤樣式
+                                    const timeHighlightStyle = item.highlight || isUserAdded ? 
+                                        `background-color: var(--color-highlight); font-weight: bold; color: var(--color-text-main);` : 
+                                        '';
+
+                                    // 圓點顏色
+                                    const dotColor = item.highlight || isUserAdded ? 'var(--color-text-main)' : (isAfternoon ? 'var(--color-divider)' : 'var(--color-text-main)');
+                                    const dotRing = item.highlight || isUserAdded ? 'ring-4' : '';
+                                    const dotHighlightShadow = (item.highlight || isUserAdded) ? 'box-shadow: 0 0 0 3px var(--color-highlight);' : '';
+                                    
+                                    // 連結處理
                                     const naverLink = item.naver_link || (item.address_copy ? `https://map.naver.com/v5/search/${encodeURIComponent(item.address_copy)}` : `https://map.naver.com/v5/search/${encodeURIComponent(item.name)}`);
 
                                     const itemLink = (item.link || item.naver_link || item.type === 'Food' || item.type === 'Activity') ? `
@@ -465,26 +529,38 @@
 
                                     return `
                                         <div class="timeline-item relative pb-6 ml-3">
-                                            <div class="timeline-dot ${dotClass} ${item.highlight ? 'ring-4' : ''}" style="border-color: var(--color-divider); background-color: ${item.highlight ? 'var(--color-text-main)' : 'var(--color-divider)'}; top: 2px; ${item.highlight ? 'box-shadow: 0 0 0 3px var(--color-highlight);' : ''}"></div>
-                                            <div class="ml-4 pl-4 border-l" style="border-color: var(--color-divider);">
-                                                <p class="text-sm font-medium p-1 rounded inline-block" style="${highlightStyle}">${item.time}</p>
-                                                <p class="text-base font-semibold mt-1" style="color: var(--color-text-main);">${item.name}</p>
-                                                <p class="text-xs text-gray-500">${item.notes || item.type}</p>
+                                            <div class="timeline-dot ${dotRing}" style="border-color: var(--color-bg-primary); background-color: ${dotColor}; top: 2px; ${dotHighlightShadow}"></div>
+                                            <div class="ml-4 pl-4 border-l ${itemBgClass} ${itemBgClass ? 'p-3 rounded-lg' : ''}" style="border-color: var(--color-divider);">
+                                                <p class="text-sm font-medium p-1 rounded inline-block" style="${timeHighlightStyle}">${item.time}</p>
+                                                <p class="text-base font-semibold mt-1" style="color: var(--color-text-main);">${item.name} ${isUserAdded ? '<span class="text-xs text-red-500 font-normal ml-1">(自訂行程)</span>' : ''}</p>
+                                                <p class="text-xs text-gray-500">${!isUserAdded ? (item.notes || item.type) : item.type}</p> 
                                                 
-                                                ${item.hours || item.address_copy ? `
+                                                ${item.hours || item.address_copy || (isUserAdded && item.notes) ? `
                                                     <div class="mt-2 p-3 rounded-lg border-l-2" style="border-color: var(--color-accent); background-color: var(--color-bg-primary);">
+                                                        
                                                         ${item.hours ? `<p class="text-xs text-gray-700 mb-1"><i class="far fa-clock mr-1 text-sm" style="color: var(--color-text-main);"></i> 營業時間: <span class="font-medium">${item.hours}</span></p>` : ''}
+                                                        
                                                         ${item.address_copy ? `
-                                                            <div class="mt-2 pt-2 border-t border-dashed" style="border-color: var(--color-divider);">
-                                                                <p class="text-xs font-medium mb-1" style="color: var(--color-text-main);">地址 (一鍵複製):</p>
+                                                            <div class="${item.hours ? 'mt-2 pt-2 border-t border-dashed' : ''}" style="border-color: var(--color-divider);">
+                                                                <p class="text-xs font-medium mb-1" style="color: var(--color-text-main);"><i class="fas fa-location-dot mr-1"></i> 地址 (一鍵複製):</p>
                                                                 <div class="flex items-center space-x-2">
                                                                     <p class="text-xs text-gray-600 font-mono break-all flex-1">${item.address_copy}</p>
-                                                                    <button onclick="copyTextToClipboard(this.previousElementSibling.textContent)" class="muji-btn-light text-xs px-2 py-1 flex items-center shrink-0 hover:shadow-md">
+                                                                    <button onclick="copyTextToClipboard(this.previousElementSibling.textContent, '地址已複製！')" class="muji-btn-light text-xs px-2 py-1 flex items-center shrink-0 hover:shadow-md">
                                                                         <i class="fas fa-copy"></i>
                                                                     </button>
                                                                 </div>
                                                             </div>
                                                         ` : ''}
+                                                        
+                                                        ${(isUserAdded && item.notes) ? `
+                                                            <div class="mt-2 pt-2 border-t border-dashed" style="border-color: var(--color-divider);">
+                                                                <p class="text-xs font-medium mb-1" style="color: var(--color-text-main);"><i class="fas fa-info-circle mr-1"></i> 介紹/備註:</p>
+                                                                <p class="text-sm text-gray-700">${item.notes}</p>
+                                                            </div>
+                                                        ` : ''}
+
+                                                        ${!isUserAdded && item.notes && !item.address_copy ? `<p class="text-xs text-gray-700 mt-2">${item.notes}</p>` : ''}
+
                                                     </div>
                                                 ` : ''}
 
@@ -500,7 +576,57 @@
                 }).join('')}
             `;
             container.innerHTML = html;
+            setupItineraryListeners();
         }
+        
+        // --- 新增行程功能邏輯 ---
+        function setupItineraryListeners() {
+            document.getElementById('add-itinerary-btn').addEventListener('click', () => {
+                const dateSelect = document.getElementById('new-item-date');
+                const timeInput = document.getElementById('new-item-time');
+                const nameInput = document.getElementById('new-item-name');
+                const addressInput = document.getElementById('new-item-address'); 
+                const descriptionInput = document.getElementById('new-item-description');
+
+                const date = dateSelect.value;
+                const time = timeInput.value.trim() || '未定時間';
+                const name = nameInput.value.trim();
+                const address = addressInput.value.trim();
+                const description = descriptionInput.value.trim();
+
+                // 要求名稱和地址皆需填寫，以確保資訊完整
+                if (!name || !address) { 
+                    alertModal("請輸入活動標題和詳細地址。");
+                    return;
+                }
+
+                const newItem = {
+                    id: Date.now(),
+                    date: date,
+                    time: time,
+                    name: name,
+                    type: 'User Activity', // 預設類型
+                    notes: description, // 將介紹/備註存入 notes
+                    address_copy: address, // 將詳細地址存入 address_copy
+                    highlight: true, // 突出顯示自訂項目
+                    isUserAdded: true
+                };
+
+                let userItems = getLocalStorage(userItineraryKey, []);
+                userItems.push(newItem);
+                setLocalStorage(userItineraryKey, userItems);
+
+                // 清空表單
+                timeInput.value = '';
+                nameInput.value = '';
+                addressInput.value = '';
+                descriptionInput.value = '';
+
+                alertModal(`自訂行程項目 "${name}" 已成功新增至 ${date}！`);
+                changeTab('ITINERARY'); // 重新渲染行程表
+            });
+        }
+
 
         // --- Tab: GUIDE (深度導覽) 渲染 (不變) ---
         function renderGuideTab(container) {
@@ -971,4 +1097,3 @@
     </script>
 </body>
 </html>
-
