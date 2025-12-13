@@ -5,8 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>韓國之旅：親友旅遊小工具</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Supabase (cloud sync) -->
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
@@ -89,123 +87,112 @@
             z-index: 10;
         }
     </style>
+
+    <!-- Supabase client (for cloud sync) -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
 </head>
 <body class="min-h-screen">
-
 <!-- Password Gate (方案B：前端固定密碼) -->
-<div id="pw-overlay" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
-    <div class="w-[min(92vw,420px)] rounded-2xl bg-white p-6 shadow-xl">
-        <div class="flex items-start justify-between gap-3">
-            <div>
-                <h2 class="text-xl font-semibold">需要密碼</h2>
-                <p class="mt-1 text-sm text-gray-600">輸入密碼後才能查看與編輯內容。</p>
-            </div>
-            <button type="button" id="pw-help" class="text-xs text-gray-500 hover:text-gray-700 underline">說明</button>
-        </div>
-
-        <form id="pw-form" class="mt-4 space-y-3">
-            <input id="pw-input" type="password"
-                   class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#514378]/40"
-                   placeholder="輸入密碼" autocomplete="current-password" />
-            <div class="flex items-center justify-between gap-3">
-                <label class="flex items-center gap-2 text-sm text-gray-700 select-none">
-                    <input id="pw-remember" type="checkbox" class="accent-[#514378]" />
-                    記住這台裝置
-                </label>
-                <button type="submit" class="rounded-lg bg-[#514378] px-4 py-2 text-white hover:opacity-95">
-                    進入
-                </button>
-            </div>
-            <div id="pw-error" class="hidden text-sm text-red-600">密碼錯誤，請再試一次。</div>
-            <div class="text-xs text-gray-500 leading-relaxed">
-                ※ 這是「前端密碼鎖」：可阻擋一般瀏覽，但懂技術的人仍可能繞過。若要真正嚴格保護，建議搭配 Cloudflare Access（Email/SSO）。
-            </div>
-        </form>
+<div id="pw-overlay" class="fixed inset-0 z-[9999] hidden items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+  <div class="w-full max-w-sm rounded-2xl bg-white shadow-xl p-6">
+    <div class="flex items-center gap-2 mb-3">
+      <div class="w-9 h-9 rounded-xl bg-gray-100 flex items-center justify-center">
+        <span class="text-lg">🔒</span>
+      </div>
+      <div>
+        <div class="text-base font-semibold text-gray-900">輸入密碼以進入</div>
+        <div class="text-xs text-gray-500">（提示：這是前端鎖，懂技術的人仍可從原始碼找到）</div>
+      </div>
     </div>
+
+    <label class="block text-sm text-gray-700 mb-1">密碼</label>
+    <input id="pw-input" type="password" inputmode="numeric" autocomplete="current-password"
+      class="w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-900/20"
+      placeholder="請輸入密碼" />
+    <div id="pw-error" class="text-sm text-red-600 mt-2"></div>
+
+    <div class="flex items-center justify-between mt-4">
+      <label class="inline-flex items-center gap-2 text-sm text-gray-700 select-none">
+        <input id="pw-remember" type="checkbox" class="rounded border-gray-300" />
+        記住我（同一裝置）
+      </label>
+      <button id="pw-submit" class="rounded-xl bg-gray-900 text-white px-4 py-2 text-sm hover:bg-gray-800">
+        進入
+      </button>
+    </div>
+  </div>
 </div>
 
 <script>
-// ===== Password Gate Config =====
-// 改成你想要的固定密碼（注意：這是前端檔案，密碼仍可能被懂技術的人找到）
-const ACCESS_PASSWORD = "0707";
-// 記住狀態：session 只在此分頁/瀏覽器工作階段；remember 會寫入 localStorage
-const SESSION_KEY = "seoul_trip_unlocked_session_v1";
-const REMEMBER_KEY = "seoul_trip_unlocked_remember_v1";
+(function () {
+  // ===== Password Gate Config =====
+  // 改成你想要的固定密碼（注意：這是前端檔案，密碼仍可能被懂技術的人找到）
+  const ACCESS_PASSWORD = "0707";
+  const SESSION_KEY = "seoul_trip_unlocked_session_v1";
+  const REMEMBER_KEY = "seoul_trip_unlocked_remember_v1";
 
-function showApp() {
-    const root = document.getElementById("app-root");
-    const overlay = document.getElementById("pw-overlay");
-    if (root) root.style.display = "";
-    if (overlay) overlay.style.display = "none";
-}
-
-function hideApp() {
-    const root = document.getElementById("app-root");
-    const overlay = document.getElementById("pw-overlay");
-    if (root) root.style.display = "none";
-    if (overlay) overlay.style.display = "flex";
-}
-
-function isUnlocked() {
+  function isUnlocked() {
     return sessionStorage.getItem(SESSION_KEY) === "1" || localStorage.getItem(REMEMBER_KEY) === "1";
-}
-
-function unlock(remember) {
+  }
+  function unlock(remember) {
     sessionStorage.setItem(SESSION_KEY, "1");
     if (remember) localStorage.setItem(REMEMBER_KEY, "1");
-    showApp();
-}
+    else localStorage.removeItem(REMEMBER_KEY);
 
-function setupPasswordGate() {
-    const form = document.getElementById("pw-form");
-    const input = document.getElementById("pw-input");
-    const error = document.getElementById("pw-error");
-    const remember = document.getElementById("pw-remember");
-    const help = document.getElementById("pw-help");
+    const overlay = document.getElementById("pw-overlay");
+    const root = document.getElementById("app-root");
+    if (overlay) overlay.style.display = "none";
+    if (root) root.style.display = "";
 
-    // 預設先鎖住避免閃現
+    try { if (typeof window.__onAppUnlocked === "function") window.__onAppUnlocked(); } catch (e) {}
+  }
+
+  window.__isAppUnlocked = isUnlocked;
+
+  document.addEventListener("DOMContentLoaded", function () {
+    const overlay = document.getElementById("pw-overlay");
+    const root = document.getElementById("app-root");
+
     if (isUnlocked()) {
-        showApp();
-    } else {
-        hideApp();
-        // 自動聚焦
-        setTimeout(() => input && input.focus(), 50);
+      if (overlay) overlay.style.display = "none";
+      if (root) root.style.display = "";
+      try { if (typeof window.__onAppUnlocked === "function") window.__onAppUnlocked(); } catch (e) {}
+      return;
     }
 
-    help && help.addEventListener("click", () => {
-        alert("這是前端密碼鎖（方案B）。
+    if (overlay) {
+      overlay.style.display = "flex";
+    }
+    if (root) {
+      root.style.display = "none";
+    }
 
-優點：家人朋友輸入同一組密碼就能用。
-限制：懂技術的人仍可能從原始碼繞過。
+    const input = document.getElementById("pw-input");
+    const btn = document.getElementById("pw-submit");
+    const remember = document.getElementById("pw-remember");
+    const error = document.getElementById("pw-error");
 
-若要更安全，建議改用 Cloudflare Access（Email/SSO 白名單）。");
+    function attempt() {
+      const v = (input && input.value ? input.value : "").trim();
+      if (v === ACCESS_PASSWORD) {
+        if (error) error.textContent = "";
+        unlock(remember && remember.checked);
+      } else {
+        if (error) error.textContent = "密碼錯誤，請再試一次";
+        if (input) { input.value = ""; input.focus(); }
+      }
+    }
+
+    if (btn) btn.addEventListener("click", attempt);
+    if (input) input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") attempt();
     });
-
-    form && form.addEventListener("submit", (e) => {
-        e.preventDefault();
-        if (!input) return;
-
-        const ok = ((input.value || "").trim()) === String(ACCESS_PASSWORD).trim();
-        if (ok) {
-            if (error) error.classList.add("hidden");
-            unlock(remember && remember.checked);
-        } else {
-            if (error) error.classList.remove("hidden");
-            input.select();
-        }
-    });
-}
-
-// 在 DOM ready 後啟動 gate（不影響你原本的程式）
-if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", setupPasswordGate);
-} else {
-    setupPasswordGate();
-}
+  });
+})();
 </script>
 
-<!-- App Root (被密碼鎖住的主要內容) -->
-<div id="app-root" style="display:none;">
+  <div id="app-root" style="display:none;">
 
 
     <header class="sticky top-0 z-20 bg-white shadow-md p-4 flex justify-between items-center border-b" style="border-color: var(--color-divider);">
@@ -383,10 +370,7 @@ if (document.readyState === "loading") {
     </div>
 
 
-    
-</div>
-
-<script>
+    <script>
         // --- 全域變數與初始化資料 ---
         const APP_ID = 'KR_TRIP_APP'; // LocalStorage 命名空間
         const exchangeRateKey = `${APP_ID}_EXCHANGE_RATE`;
@@ -396,9 +380,6 @@ if (document.readyState === "loading") {
         const memoInfoKey = `${APP_ID}_MEMO_INFO`; // NEW: 資訊頁備註
         const tripDataKey = `${APP_ID}_TRIP_DATA`; 
         const APP_TITLE_KEY = `${APP_ID}_APP_TITLE`; // NEW KEY
-
-        // --- Cloud Sync / UI state ---
-        let currentTab = 'FLIGHTS_STAY';
 
         let currentRate = 0.024; // 預設韓元到台幣匯率 (可調整)
         const TWD_SYMBOL = 'NT$';
@@ -536,14 +517,192 @@ if (document.readyState === "loading") {
             } catch (e) {
                 console.error(`Error setting LocalStorage key ${key}`, e);
             }
-
-            // 若不是在套用雲端資料，且是需要同步的 key，就排程推送
-            if (!applyingRemoteSnapshot && SYNC_KEYS.includes(key)) {
-                scheduleCloudPush();
-            }
         }
         
-        // --- 通用剪貼簿複製功能 ---
+        
+// ===============================
+// Cloud Sync (Supabase)
+// ===============================
+// 1) Supabase 兩個值（你已填好）：
+const SUPABASE_URL = "https://iqkhvluwlkqmwgynwxnh.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlxa2h2bHV3bGtxbXdneW53eG5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU1OTM3NTMsImV4cCI6MjA4MTE2OTc1M30.3FCpo4LCfCQWBj3PcZP4IJTYLR1lp_xmqan9zG3BHz0";
+// 2) 同一群人共用同一份資料（可改成不同名稱）
+const SHARED_DOC_ID = "seoul-trip";
+
+// 3) 要同步的 localStorage keys
+const SYNC_KEYS = [exchangeRateKey, expensesKey, checklistKey, memoKey, memoInfoKey, tripDataKey, APP_TITLE_KEY];
+
+let supabaseClient = null;
+let cloudAutoSync = true;
+let cloudPushTimer = null;
+let cloudPollTimer = null;
+let cloudLastPushedHash = "";
+let cloudLastRemoteUpdatedAt = null;
+let cloudApplyingRemoteSnapshot = false;
+
+function initSupabaseClient() {
+  try {
+    if (!window.supabase || !window.supabase.createClient) {
+      console.warn("[CloudSync] Supabase client not loaded.");
+      return null;
+    }
+    return window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  } catch (e) {
+    console.error("[CloudSync] init failed:", e);
+    return null;
+  }
+}
+
+function buildLocalSnapshot() {
+  const snap = {};
+  for (const k of SYNC_KEYS) {
+    snap[k] = getLocalStorage(k, null);
+  }
+  return snap;
+}
+
+async function ensureSharedDocExists() {
+  if (!supabaseClient) return;
+  try {
+    // 若不存在就建立一筆（upsert）
+    const now = new Date().toISOString();
+    const empty = buildLocalSnapshot();
+    await supabaseClient
+      .from("shared_docs")
+      .upsert({ id: SHARED_DOC_ID, data: empty, updated_at: now }, { onConflict: "id" });
+  } catch (e) {
+    console.error("[CloudSync] ensure doc failed:", e);
+  }
+}
+
+function scheduleCloudPush() {
+  if (!cloudAutoSync) return;
+  if (cloudApplyingRemoteSnapshot) return;
+  clearTimeout(cloudPushTimer);
+  cloudPushTimer = setTimeout(pushToCloud, 800);
+}
+
+async function pushToCloud() {
+  if (!supabaseClient) return;
+  try {
+    const snapshot = buildLocalSnapshot();
+    const hash = JSON.stringify(snapshot);
+    if (hash === cloudLastPushedHash) return;
+
+    cloudLastPushedHash = hash;
+    const now = new Date().toISOString();
+
+    const { data, error } = await supabaseClient
+      .from("shared_docs")
+      .upsert({ id: SHARED_DOC_ID, data: snapshot, updated_at: now }, { onConflict: "id" })
+      .select("updated_at")
+      .single();
+
+    if (error) throw error;
+    cloudLastRemoteUpdatedAt = data?.updated_at || now;
+  } catch (e) {
+    console.error("[CloudSync] push failed:", e);
+  }
+}
+
+async function pullFromCloud(force = false) {
+  if (!supabaseClient) return;
+  try {
+    const { data, error } = await supabaseClient
+      .from("shared_docs")
+      .select("data, updated_at")
+      .eq("id", SHARED_DOC_ID)
+      .single();
+
+    if (error) throw error;
+    if (!data) return;
+
+    const remoteUpdatedAt = data.updated_at || null;
+    if (!force && remoteUpdatedAt && cloudLastRemoteUpdatedAt && remoteUpdatedAt <= cloudLastRemoteUpdatedAt) {
+      return;
+    }
+
+    // 防止自己剛推上去又被拉回來造成循環
+    cloudLastRemoteUpdatedAt = remoteUpdatedAt;
+
+    if (data.data) {
+      applyRemoteSnapshot(data.data);
+    }
+  } catch (e) {
+    console.error("[CloudSync] pull failed:", e);
+  }
+}
+
+function applyRemoteSnapshot(snapshot) {
+  cloudApplyingRemoteSnapshot = true;
+  try {
+    for (const k of SYNC_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(snapshot, k)) {
+        setLocalStorage(k, snapshot[k]);
+      }
+    }
+  } finally {
+    cloudApplyingRemoteSnapshot = false;
+  }
+
+  // 讓畫面刷新到最新（不重整整頁）
+  try {
+    loadTitle();
+    loadInitialData();
+    const activeBtn = document.querySelector(".nav-item.active");
+    if (activeBtn && activeBtn.dataset && activeBtn.dataset.tab) {
+      changeTab(activeBtn.dataset.tab);
+    }
+    if (typeof alertModal === "function") {
+      alertModal("已同步到最新版本");
+    }
+  } catch (e) {
+    console.warn("[CloudSync] UI refresh failed, fallback reload.", e);
+    location.reload();
+  }
+}
+
+function startCloudSync() {
+  if (!cloudAutoSync) return;
+
+  // 只在解鎖後開始同步（避免被未授權者一直打 API）
+  if (window.__isAppUnlocked && !window.__isAppUnlocked()) return;
+
+  if (!supabaseClient) {
+    supabaseClient = initSupabaseClient();
+  }
+  if (!supabaseClient) return;
+
+  ensureSharedDocExists().then(() => pullFromCloud(true));
+
+  clearInterval(cloudPollTimer);
+  cloudPollTimer = setInterval(() => pullFromCloud(false), 15000);
+}
+
+// 解鎖後自動啟動同步
+(function bindUnlockHook() {
+  const prev = window.__onAppUnlocked;
+  window.__onAppUnlocked = function () {
+    try { if (typeof prev === "function") prev(); } catch (e) {}
+    startCloudSync();
+  };
+  // 如果一開始就已經解鎖，直接啟動
+  try { if (window.__isAppUnlocked && window.__isAppUnlocked()) startCloudSync(); } catch (e) {}
+})();
+
+// setLocalStorage 包一層：每次寫入 localStorage，就自動排程推雲端
+(function wrapSetLocalStorage() {
+  const _orig = setLocalStorage;
+  setLocalStorage = function (key, value) {
+    _orig(key, value);
+    // 避免「從雲端套用」又觸發 push
+    if (!cloudApplyingRemoteSnapshot) {
+      scheduleCloudPush();
+    }
+  };
+})();
+
+// --- 通用剪貼簿複製功能 ---
         function copyTextToClipboard(text, message) {
             try {
                 // 使用 document.execCommand('copy') 作為 iframe 環境的首選方法
@@ -762,7 +921,6 @@ if (document.readyState === "loading") {
 
         // --- 導航與內容渲染 (不變) ---
         function changeTab(tabName) {
-            currentTab = tabName;
             const content = document.getElementById('app-content');
             const navItems = document.querySelectorAll('.nav-item');
 
@@ -1583,38 +1741,6 @@ if (document.readyState === "loading") {
             let html = `
                 <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💡 旅遊實用資訊</h2>
 
-
-<div class="muji-card p-4 mb-6">
-    <h3 class="text-lg font-semibold mb-3 border-b pb-2" style="color: var(--color-text-main); border-color: var(--color-divider);">☁️ 共享同步（需要登入）</h3>
-    <p class="text-sm text-gray-600 mb-4">這會把「行程、清單、備忘錄、開銷、匯率、標題」同步到同一份雲端資料，讓所有登入者都能看到彼此修改。</p>
-
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-        <input id="cloud-email" type="email" class="p-2 border rounded-lg text-sm" placeholder="Email" style="border-color: var(--color-divider); color: var(--color-text-main);">
-        <input id="cloud-password" type="password" class="p-2 border rounded-lg text-sm" placeholder="Password" style="border-color: var(--color-divider); color: var(--color-text-main);">
-    </div>
-
-    <div class="grid grid-cols-2 gap-3 mb-3">
-        <button id="cloud-login-btn" class="muji-btn">登入</button>
-        <button id="cloud-logout-btn" class="muji-btn-light hidden" style="border-color: var(--color-divider);">登出</button>
-    </div>
-
-    <div class="flex items-center justify-between mb-4">
-        <label class="flex items-center space-x-2 text-sm text-gray-700">
-            <input id="cloud-auto-sync" type="checkbox" class="h-4 w-4">
-            <span>自動同步</span>
-        </label>
-        <span id="cloud-status" class="text-xs text-gray-500">未登入</span>
-    </div>
-
-    <div class="grid grid-cols-2 gap-3">
-        <button id="cloud-pull-btn" class="muji-btn-light" style="border-color: var(--color-divider);">從雲端更新</button>
-        <button id="cloud-push-btn" class="muji-btn-light" style="border-color: var(--color-divider);">上傳到雲端</button>
-    </div>
-
-    <p class="text-xs text-gray-500 mt-3">注意：多人同時改同一段內容時，採「最後上傳者覆蓋」；建議一次只由一人編輯同一頁面的內容。</p>
-</div>
-
-
                 <div class="muji-card p-4 mb-6">
                     <h3 class="text-lg font-semibold mb-3 border-b pb-2" style="color: var(--color-text-main); border-color: var(--color-divider);">當地資訊連結</h3>
                     <div class="space-y-3">
@@ -1662,11 +1788,11 @@ if (document.readyState === "loading") {
                 </div>
             `;
             container.innerHTML = html;
-            setupInfoListeners(infoMemoText);
+            setupInfoListeners();
         }
         
         // NEW: 設置 Info Tab 的事件監聽器
-        function setupInfoListeners(infoMemoText) {  
+        function setupInfoListeners() {  
             renderMemoOutput(infoMemoText, 'memo-info-output', '<i class="fas fa-shield-halved mr-2"></i>'); // 使用盾牌圖示作為備註連結前綴
 
             document.getElementById('save-memo-info-btn').addEventListener('click', () => {
@@ -1676,327 +1802,7 @@ if (document.readyState === "loading") {
                 renderMemoOutput(newMemoText, 'memo-info-output', '<i class="fas fa-shield-halved mr-2"></i>');
                 alertModal("備註已儲存。");
             });
-        
-            // Cloud sync UI (Info tab)
-            setupCloudSyncUI();
         }
-
-
-        
-// =========================
-// Cloud Sync (Supabase)
-// =========================
-// 1) 到 Supabase 建專案後，把下面兩個值貼上
-//    - SUPABASE_URL: Project Settings → API → Project URL
-//    - SUPABASE_ANON_KEY: Project Settings → API → anon public key
-const SUPABASE_URL = 'https://iqkhvluwlkqmwgynwxnh.supabase.co';        // <-- TODO
-const SUPABASE_ANON_KEY = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlxa2h2bHV3bGtxbXdneW53eG5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU1OTM3NTMsImV4cCI6MjA4MTE2OTc1M30.3FCpo4LCfCQWBj3PcZP4IJTYLR1lp_xmqan9zG3BHz0`;   // <-- TODO
-const SHARED_DOC_ID = 'seoul-trip'; // 同一群人共用同一份資料
-
-const SYNC_KEYS = [
-    exchangeRateKey,
-    expensesKey,
-    checklistKey,
-    memoKey,
-    memoInfoKey,
-    tripDataKey,
-    APP_TITLE_KEY,
-];
-
-let supabaseClient = null;
-let cloudAutoSync = true;
-let applyingRemoteSnapshot = false;
-let pushTimer = null;
-let lastAppliedUpdatedAt = null;
-let cloudPollTimer = null;
-
-function startCloudPolling() {
-    if (!cloudAutoSync) return;
-    stopCloudPolling();
-    // 以輪詢作為 Realtime 的備援，避免網路/Realtime 設定造成不同步
-    cloudPollTimer = setInterval(() => pullFromCloud(true), 15000);
-}
-
-function stopCloudPolling() {
-    if (cloudPollTimer) {
-        clearInterval(cloudPollTimer);
-        cloudPollTimer = null;
-    }
-}
-
-
-function isCloudConfigured() {
-    return !!(SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase && window.supabase.createClient);
-}
-
-function initCloudSync() {
-    if (!isCloudConfigured()) {
-        console.warn('[CloudSync] Not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY to enable.');
-        return;
-    }
-    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-    // 1) 監聽登入狀態
-    supabaseClient.auth.onAuthStateChange((_event, _session) => {
-        refreshCloudStatusUI();
-        if (_session) {
-            startRealtimeSubscription();
-            // 自動同步：登入後先抓一次最新，再啟動輪詢備援
-            pullFromCloud(true);
-            startCloudPolling();
-        } else {
-            stopCloudPolling();
-        }
-    });
-
-    // 2) 若已有 session，啟用訂閱並先拉一次雲端資料
-    supabaseClient.auth.getSession().then(({ data, error }) => {
-        if (error) console.warn('[CloudSync] getSession error:', error);
-        if (data && data.session) {
-            startRealtimeSubscription();
-            pullFromCloud(true);
-            startCloudPolling();
-        }
-        refreshCloudStatusUI();
-    });
-}
-
-function collectSnapshot() {
-    return {
-        app_title: getLocalStorage(APP_TITLE_KEY, DEFAULT_TITLE),
-        exchange_rate: getLocalStorage(exchangeRateKey, 0.024),
-        expenses: getLocalStorage(expensesKey, []),
-        checklist: getLocalStorage(checklistKey, initialChecklist),
-        memo: getLocalStorage(memoKey, "歡迎使用備忘錄！可以在這裡記錄網址，會自動轉換成連結按鈕。\n\n例如：\nNaver 地圖: https://map.naver.com/"),
-        memo_info: getLocalStorage(memoInfoKey, "例如：\n1. 旅遊保險單號：PL-1234567\n2. 信用卡客服電話：+886-2-2500-XXXX\n3. 備用聯絡人：小明，手機：tel:+886-912-345-678"),
-        trip_data: getLocalStorage(tripDataKey, initialTripData),
-    };
-}
-
-function applySnapshot(snapshot, updatedAt = null) {
-    if (!snapshot) return;
-
-    applyingRemoteSnapshot = true;
-    try {
-        // 先寫回 LocalStorage（讓各分頁 render 都吃得到）
-        setLocalStorage(APP_TITLE_KEY, snapshot.app_title ?? DEFAULT_TITLE);
-        setLocalStorage(exchangeRateKey, snapshot.exchange_rate ?? 0.024);
-        setLocalStorage(expensesKey, snapshot.expenses ?? []);
-        setLocalStorage(checklistKey, snapshot.checklist ?? initialChecklist);
-        setLocalStorage(memoKey, snapshot.memo ?? "");
-        setLocalStorage(memoInfoKey, snapshot.memo_info ?? "");
-        setLocalStorage(tripDataKey, snapshot.trip_data ?? initialTripData);
-
-        // 更新全域變數
-        currentRate = snapshot.exchange_rate ?? currentRate;
-        tripData = snapshot.trip_data ?? tripData;
-
-        // UI 同步
-        loadTitle();
-        updateRateDisplay();
-
-        // 重新渲染當前 tab（避免使用者要手動刷新）
-        changeTab(currentTab);
-
-        if (updatedAt) lastAppliedUpdatedAt = updatedAt;
-    } finally {
-        applyingRemoteSnapshot = false;
-    }
-}
-
-async function pushToCloud(reason = 'local_change') {
-    if (!supabaseClient) return;
-    const { data: sessionData } = await supabaseClient.auth.getSession();
-    if (!sessionData?.session) {
-        console.warn('[CloudSync] Not logged in; skip push.');
-        refreshCloudStatusUI();
-        return;
-    }
-
-    const snapshot = collectSnapshot();
-    const payload = {
-        id: SHARED_DOC_ID,
-        data: snapshot,
-        updated_at: new Date().toISOString(),
-        reason,
-    };
-
-    const { error } = await supabaseClient
-        .from('shared_state')
-        .upsert(payload, { onConflict: 'id' });
-
-    if (error) {
-        console.error('[CloudSync] push error:', error);
-        alertModal('雲端上傳失敗：請確認已建立 shared_state 資料表與權限設定。');
-    } else {
-        refreshCloudStatusUI('已上傳');
-    }
-}
-
-async function pullFromCloud(silent = false) {
-    if (!supabaseClient) return;
-    const { data: sessionData } = await supabaseClient.auth.getSession();
-    if (!sessionData?.session) {
-        if (!silent) alertModal('請先登入才能從雲端讀取。');
-        refreshCloudStatusUI();
-        return;
-    }
-
-    const { data, error } = await supabaseClient
-        .from('shared_state')
-        .select('data, updated_at')
-        .eq('id', SHARED_DOC_ID)
-        .maybeSingle();
-
-    if (error) {
-        console.error('[CloudSync] pull error:', error);
-        if (!silent) alertModal('雲端讀取失敗：請確認資料表與權限。');
-        return;
-    }
-
-    if (!data) {
-        if (!silent) {
-            alertModal('雲端還沒有資料。你可以先按「上傳到雲端」建立第一份。');
-        } else if (cloudAutoSync) {
-            // 自動模式：雲端尚無資料時，以上傳本機資料作為第一份
-            await pushToCloud('seed_empty_cloud');
-        }
-        return;
-    }
-
-    // 避免重複套用舊資料
-    if (data.updated_at && lastAppliedUpdatedAt && data.updated_at <= lastAppliedUpdatedAt) {
-        if (!silent) alertModal('目前已是最新版本。');
-        return;
-    }
-
-    applySnapshot(data.data, data.updated_at);
-    if (!silent) alertModal('已從雲端更新完成！');
-}
-
-function scheduleCloudPush() {
-    if (!cloudAutoSync) return;
-    if (!supabaseClient) return;
-    if (pushTimer) clearTimeout(pushTimer);
-    pushTimer = setTimeout(() => pushToCloud('auto_sync'), 600);
-}
-
-let realtimeStarted = false;
-function startRealtimeSubscription() {
-    if (!supabaseClient || realtimeStarted) return;
-    realtimeStarted = true;
-
-    // 需要在 Supabase 控制台把 shared_state 開啟 Realtime
-    supabaseClient
-        .channel('shared_state_changes')
-        .on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'shared_state', filter: `id=eq.${SHARED_DOC_ID}` },
-            (payload) => {
-                const row = payload.new;
-                if (!row) return;
-
-                // 跳過自己剛推上去又被即時回傳的重複套用
-                if (row.updated_at && lastAppliedUpdatedAt && row.updated_at <= lastAppliedUpdatedAt) return;
-
-                applySnapshot(row.data, row.updated_at);
-                refreshCloudStatusUI('已收到更新');
-            }
-        )
-        .subscribe((status) => {
-            console.log('[CloudSync] Realtime status:', status);
-        });
-}
-
-async function cloudLogin(email, password) {
-    if (!supabaseClient) return;
-    const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
-    if (error) {
-        console.error('[CloudSync] login error:', error);
-        alertModal('登入失敗：請確認帳號密碼，或在 Supabase 先建立使用者。');
-    } else {
-        alertModal('登入成功！');
-        refreshCloudStatusUI();
-        // 登入後先拉一次雲端版本，並啟用自動同步
-        pullFromCloud(true);
-        startCloudPolling();
-    }
-}
-
-async function cloudLogout() {
-    if (!supabaseClient) return;
-    await supabaseClient.auth.signOut();
-    stopCloudPolling();
-    alertModal('已登出。');
-    refreshCloudStatusUI();
-}
-
-async function refreshCloudStatusUI(extra = '') {
-    const statusEl = document.getElementById('cloud-status');
-    const loginBtn = document.getElementById('cloud-login-btn');
-    const logoutBtn = document.getElementById('cloud-logout-btn');
-
-    if (!statusEl) return;
-
-    if (!isCloudConfigured()) {
-        statusEl.textContent = '尚未設定雲端（請填 SUPABASE_URL / ANON_KEY）';
-        if (loginBtn) loginBtn.disabled = true;
-        if (logoutBtn) logoutBtn.classList.add('hidden');
-        return;
-    }
-
-    if (!supabaseClient) {
-        statusEl.textContent = '雲端尚未初始化';
-        return;
-    }
-
-    const { data } = await supabaseClient.auth.getSession();
-    const loggedIn = !!data?.session;
-
-    statusEl.textContent = loggedIn ? `已登入 ${extra ? '· ' + extra : ''}` : '未登入';
-    if (loginBtn) loginBtn.classList.toggle('hidden', loggedIn);
-    if (logoutBtn) logoutBtn.classList.toggle('hidden', !loggedIn);
-}
-
-function setupCloudSyncUI() {
-    // Info tab 才有這些元素，可能不存在
-    const emailEl = document.getElementById('cloud-email');
-    const passEl = document.getElementById('cloud-password');
-    const loginBtn = document.getElementById('cloud-login-btn');
-    const logoutBtn = document.getElementById('cloud-logout-btn');
-    const pullBtn = document.getElementById('cloud-pull-btn');
-    const pushBtn = document.getElementById('cloud-push-btn');
-    const autoEl = document.getElementById('cloud-auto-sync');
-
-    if (autoEl) {
-        autoEl.checked = cloudAutoSync;
-        autoEl.addEventListener('change', () => {
-            cloudAutoSync = autoEl.checked;
-            if (cloudAutoSync) {
-                pullFromCloud(true);
-                startCloudPolling();
-            } else {
-                stopCloudPolling();
-            }
-            refreshCloudStatusUI(cloudAutoSync ? '自動同步開' : '自動同步關');
-        });
-    }
-
-    if (loginBtn && emailEl && passEl) {
-        loginBtn.addEventListener('click', () => cloudLogin(emailEl.value.trim(), passEl.value));
-    }
-    if (logoutBtn) {
-        logoutBtn.addEventListener('click', cloudLogout);
-    }
-    if (pullBtn) {
-        pullBtn.addEventListener('click', () => pullFromCloud(false));
-    }
-    if (pushBtn) {
-        pushBtn.addEventListener('click', () => pushToCloud('manual_push'));
-    }
-
-    refreshCloudStatusUI();
-}
 
 
         // --- Custom Alert Modal (取代 alert()) ---
@@ -2026,8 +1832,7 @@ function setupCloudSyncUI() {
             loadInitialData(); // 加載匯率和行程資料
             loadTitle(); // NEW: 加載並顯示標題
             
-                        initCloudSync(); // NEW: 雲端同步初始化（Supabase）
-// 初始載入 FLIGHTS_STAY tab (新的首頁)
+            // 初始載入 FLIGHTS_STAY tab (新的首頁)
             changeTab('FLIGHTS_STAY');
 
             // 綁定底部導航列事件
@@ -2069,5 +1874,7 @@ function setupCloudSyncUI() {
         });
 
     </script>
+
+  </div>
 </body>
 </html>
