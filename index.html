@@ -492,24 +492,16 @@
 
 
         // --- LocalStorage 讀寫工具 ---
-        function getLocalStorage(key, defaultValue) {
-            const data = localStorage.getItem(key);
-            try {
-                // 處理舊版單一陣列結構，若載入失敗或結構不符，則返回新結構的預設值
-                const parsedData = data ? JSON.parse(data) : defaultValue;
-                
-                // 檢查是否為舊版單一陣列 (Array.isArray(parsedData) && !parsedData.luggage)
-                if (Array.isArray(parsedData) && key === checklistKey) {
-                    console.warn("Detected old checklist format. Returning new default structure.");
-                    return defaultValue; // 避免舊結構影響新功能
-                }
-
-                return parsedData;
-            } catch (e) {
-                console.error(`Error parsing LocalStorage key ${key}`, e);
-                return defaultValue;
-            }
-        }
+        function getLocalStorage(key, defVal) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return defVal;
+    const parsed = JSON.parse(raw);
+    return (parsed === null || parsed === undefined) ? defVal : parsed;
+  } catch (e) {
+    return defVal;
+  }
+}
 
         function setLocalStorage(key, value) {
             try {
@@ -556,7 +548,17 @@ function initSupabaseClient() {
 function buildLocalSnapshot() {
   const snap = {};
   for (const k of SYNC_KEYS) {
-    snap[k] = getLocalStorage(k, null);
+    // Only include keys that actually exist and are not null.
+    // This prevents us from pushing lots of nulls and later overwriting defaults.
+    const raw = localStorage.getItem(k);
+    if (raw === null) continue;
+    try {
+      const v = JSON.parse(raw);
+      if (v === null || v === undefined) continue;
+      snap[k] = v;
+    } catch (e) {
+      // ignore invalid JSON
+    }
   }
   return snap;
 }
@@ -634,31 +636,15 @@ async function pullFromCloud(force = false) {
 }
 
 function applyRemoteSnapshot(snapshot) {
-  cloudApplyingRemoteSnapshot = true;
-  try {
-    for (const k of SYNC_KEYS) {
-      if (Object.prototype.hasOwnProperty.call(snapshot, k)) {
-        setLocalStorage(k, snapshot[k]);
-      }
-    }
-  } finally {
-    cloudApplyingRemoteSnapshot = false;
-  }
-
-  // 讓畫面刷新到最新（不重整整頁）
-  try {
-    loadTitle();
-    loadInitialData();
-    const activeBtn = document.querySelector(".nav-item.active");
-    if (activeBtn && activeBtn.dataset && activeBtn.dataset.tab) {
-      changeTab(activeBtn.dataset.tab);
-    }
-    if (typeof alertModal === "function") {
-      alertModal("已同步到最新版本");
-    }
-  } catch (e) {
-    console.warn("[CloudSync] UI refresh failed, fallback reload.", e);
-    location.reload();
+  if (!snapshot || typeof snapshot !== "object") return;
+  for (const k of SYNC_KEYS) {
+    if (!(k in snapshot)) continue;
+    const v = snapshot[k];
+    // Never write null/undefined into localStorage; keep app defaults instead.
+    if (v === null || v === undefined) continue;
+    try {
+      localStorage.setItem(k, JSON.stringify(v));
+    } catch (e) {}
   }
 }
 
@@ -773,11 +759,18 @@ function startCloudSync() {
         }
 
         function updateRateDisplay() {
-            const display = document.getElementById('current-exchange-rate');
-            if (display) {
-                display.textContent = `KRW/TWD: ${currentRate.toFixed(4)}`;
-            }
-        }
+  const badge = document.getElementById("rate-badge");
+  if (!badge) return;
+
+  const v = getLocalStorage(exchangeRateKey, 0.024);
+  const rate = Number(v);
+
+  if (!Number.isFinite(rate)) {
+    badge.textContent = "KRW/TWD: -";
+    return;
+  }
+  badge.textContent = `KRW/TWD: ${rate.toFixed(3)}`;
+}
 
         function krwToTwd(krw) {
             return (krw * currentRate).toFixed(0);
