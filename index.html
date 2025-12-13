@@ -185,7 +185,7 @@ function setupPasswordGate() {
         e.preventDefault();
         if (!input) return;
 
-        const ok = (input.value || "") === ACCESS_PASSWORD;
+        const ok = ((input.value || "").trim()) === String(ACCESS_PASSWORD).trim();
         if (ok) {
             if (error) error.classList.add("hidden");
             unlock(remember && remember.checked);
