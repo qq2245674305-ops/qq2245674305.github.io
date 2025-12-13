@@ -516,8 +516,9 @@
 // Cloud Sync (Supabase)
 // ===============================
 // 1) Supabase 兩個值（你已填好）：
-const SUPABASE_URL = "https://iqkhvluwlkqmwgynwxnh.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlxa2h2bHV3bGtxbXdneW53eG5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU1OTM3NTMsImV4cCI6MjA4MTE2OTc1M30.3FCpo4LCfCQWBj3PcZP4IJTYLR1lp_xmqan9zG3BHz0";
+const SUPABASE_URL = "https://iqkhvluwlkqmwgynwxnh.supabase.co"; // 你的 Supabase Project URL
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlxa2h2bHV3bGtxbXdneW53eG5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU1OTM3NTMsImV4cCI6MjA4MTE2OTc1M30.3FCpo4LCfCQWBj3PcZP4IJTYLR1lp_xmqan9zG3BHz0"; // Supabase Settings → API → anon public（不要放 service_role）
+const ENABLE_CLOUD_SYNC = SUPABASE_ANON_KEY !== "PASTE_YOUR_SUPABASE_ANON_KEY_HERE";
 // 2) 同一群人共用同一份資料（可改成不同名稱）
 const SHARED_DOC_ID = "seoul-trip";
 
