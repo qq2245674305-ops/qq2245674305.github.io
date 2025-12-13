@@ -92,6 +92,122 @@
 </head>
 <body class="min-h-screen">
 
+<!-- Password Gate (方案B：前端固定密碼) -->
+<div id="pw-overlay" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+    <div class="w-[min(92vw,420px)] rounded-2xl bg-white p-6 shadow-xl">
+        <div class="flex items-start justify-between gap-3">
+            <div>
+                <h2 class="text-xl font-semibold">需要密碼</h2>
+                <p class="mt-1 text-sm text-gray-600">輸入密碼後才能查看與編輯內容。</p>
+            </div>
+            <button type="button" id="pw-help" class="text-xs text-gray-500 hover:text-gray-700 underline">說明</button>
+        </div>
+
+        <form id="pw-form" class="mt-4 space-y-3">
+            <input id="pw-input" type="password"
+                   class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[#514378]/40"
+                   placeholder="輸入密碼" autocomplete="current-password" />
+            <div class="flex items-center justify-between gap-3">
+                <label class="flex items-center gap-2 text-sm text-gray-700 select-none">
+                    <input id="pw-remember" type="checkbox" class="accent-[#514378]" />
+                    記住這台裝置
+                </label>
+                <button type="submit" class="rounded-lg bg-[#514378] px-4 py-2 text-white hover:opacity-95">
+                    進入
+                </button>
+            </div>
+            <div id="pw-error" class="hidden text-sm text-red-600">密碼錯誤，請再試一次。</div>
+            <div class="text-xs text-gray-500 leading-relaxed">
+                ※ 這是「前端密碼鎖」：可阻擋一般瀏覽，但懂技術的人仍可能繞過。若要真正嚴格保護，建議搭配 Cloudflare Access（Email/SSO）。
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+// ===== Password Gate Config =====
+// 改成你想要的固定密碼（注意：這是前端檔案，密碼仍可能被懂技術的人找到）
+const ACCESS_PASSWORD = "0707";
+// 記住狀態：session 只在此分頁/瀏覽器工作階段；remember 會寫入 localStorage
+const SESSION_KEY = "seoul_trip_unlocked_session_v1";
+const REMEMBER_KEY = "seoul_trip_unlocked_remember_v1";
+
+function showApp() {
+    const root = document.getElementById("app-root");
+    const overlay = document.getElementById("pw-overlay");
+    if (root) root.style.display = "";
+    if (overlay) overlay.style.display = "none";
+}
+
+function hideApp() {
+    const root = document.getElementById("app-root");
+    const overlay = document.getElementById("pw-overlay");
+    if (root) root.style.display = "none";
+    if (overlay) overlay.style.display = "flex";
+}
+
+function isUnlocked() {
+    return sessionStorage.getItem(SESSION_KEY) === "1" || localStorage.getItem(REMEMBER_KEY) === "1";
+}
+
+function unlock(remember) {
+    sessionStorage.setItem(SESSION_KEY, "1");
+    if (remember) localStorage.setItem(REMEMBER_KEY, "1");
+    showApp();
+}
+
+function setupPasswordGate() {
+    const form = document.getElementById("pw-form");
+    const input = document.getElementById("pw-input");
+    const error = document.getElementById("pw-error");
+    const remember = document.getElementById("pw-remember");
+    const help = document.getElementById("pw-help");
+
+    // 預設先鎖住避免閃現
+    if (isUnlocked()) {
+        showApp();
+    } else {
+        hideApp();
+        // 自動聚焦
+        setTimeout(() => input && input.focus(), 50);
+    }
+
+    help && help.addEventListener("click", () => {
+        alert("這是前端密碼鎖（方案B）。
+
+優點：家人朋友輸入同一組密碼就能用。
+限制：懂技術的人仍可能從原始碼繞過。
+
+若要更安全，建議改用 Cloudflare Access（Email/SSO 白名單）。");
+    });
+
+    form && form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        if (!input) return;
+
+        const ok = (input.value || "") === ACCESS_PASSWORD;
+        if (ok) {
+            if (error) error.classList.add("hidden");
+            unlock(remember && remember.checked);
+        } else {
+            if (error) error.classList.remove("hidden");
+            input.select();
+        }
+    });
+}
+
+// 在 DOM ready 後啟動 gate（不影響你原本的程式）
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", setupPasswordGate);
+} else {
+    setupPasswordGate();
+}
+</script>
+
+<!-- App Root (被密碼鎖住的主要內容) -->
+<div id="app-root" style="display:none;">
+
+
     <header class="sticky top-0 z-20 bg-white shadow-md p-4 flex justify-between items-center border-b" style="border-color: var(--color-divider);">
         <h1 class="text-xl font-bold flex items-center space-x-2" style="color: var(--color-text-main);">
             <span id="title-display-area" class="flex items-center">
@@ -267,7 +383,10 @@
     </div>
 
 
-    <script>
+    
+</div>
+
+<script>
         // --- 全域變數與初始化資料 ---
         const APP_ID = 'KR_TRIP_APP'; // LocalStorage 命名空間
         const exchangeRateKey = `${APP_ID}_EXCHANGE_RATE`;
