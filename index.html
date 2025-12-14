@@ -211,7 +211,7 @@
             </span>
         </h1>
 
-        <div id="current-exchange-rate" class="text-sm font-medium px-3 py-1 rounded-full" style="background-color: var(--color-bg-primary); color: var(--color-text-main);">
+        <div id="rate-badge" class="text-sm font-medium px-3 py-1 rounded-full" style="background-color: var(--color-bg-primary); color: var(--color-text-main);">
             KRW/TWD: -
         </div>
     </header>
@@ -229,11 +229,7 @@
                 <i class="fas fa-calendar-alt text-xl"></i>
                 <span class="text-xs mt-1">行程表</span>
             </button>
-            <button class="nav-item flex flex-col items-center p-2" data-tab="GUIDE">
-                <i class="fas fa-map-marked-alt text-xl"></i>
-                <span class="text-xs mt-1">導覽</span>
-            </button>
-            <button class="nav-item flex flex-col items-center p-2" data-tab="WALLET">
+<button class="nav-item flex flex-col items-center p-2" data-tab="WALLET">
                 <i class="fas fa-calculator text-xl"></i>
                 <span class="text-xs mt-1">記帳</span>
             </button>
@@ -374,6 +370,7 @@
         // --- 全域變數與初始化資料 ---
         const APP_ID = 'KR_TRIP_APP'; // LocalStorage 命名空間
         const exchangeRateKey = `${APP_ID}_EXCHANGE_RATE`;
+        const daesagwanRateKey = `${APP_ID}_DAESAGWAN_RATE`; // NEW: 明洞大使館匯率參考
         const expensesKey = `${APP_ID}_EXPENSES`;
         const checklistKey = `${APP_ID}_CHECKLIST`;
         const memoKey = `${APP_ID}_MEMO`;
@@ -410,6 +407,7 @@
         // 核心行程數據 - 初始值 (保持不變)
         const initialTripData = {
             flights: "去程：2026/2/13 華航CI164 高雄-仁川 (07:10 - 10:55)；回程：2026/2/21 華航CI165 仁川-高雄 (12:00 - 14:10)",
+            flights_note: "請注意：去程CI164預計10:55抵達仁川；回程CI165為12:00起飛，請務必預留充足交通與報到時間。",
             accommodation: [
                 // [0] 大自然韓屋旅館
                 { date: "2/13 - 2/15", name: "大自然韓屋旅館 (Dajayon Hanok Stay)", address: "81-3, Yulgok-ro 10-gil, Jongro-gu, 鐘路, 首爾, 韓國", mapLink: "https://www.google.com/maps/place/Dajayon+Hanok+Stay/data=!4m2!3m1!1s0x357ca352a7cdd2d5:0x5c2a92c61f4e3531?sa=X&ved=1t:242&ictx=111" },
@@ -523,7 +521,7 @@ const ENABLE_CLOUD_SYNC = SUPABASE_ANON_KEY !== "PASTE_YOUR_SUPABASE_ANON_KEY_HE
 const SHARED_DOC_ID = "seoul-trip";
 
 // 3) 要同步的 localStorage keys
-const SYNC_KEYS = [exchangeRateKey, expensesKey, checklistKey, memoKey, memoInfoKey, tripDataKey, APP_TITLE_KEY];
+const SYNC_KEYS = [exchangeRateKey, daesagwanRateKey, expensesKey, checklistKey, memoKey, memoInfoKey, tripDataKey, APP_TITLE_KEY];
 
 let supabaseClient = null;
 let cloudAutoSync = true;
@@ -938,10 +936,7 @@ function startCloudSync() {
                 case 'ITINERARY':
                     renderItineraryTab(content);
                     break;
-                case 'GUIDE':
-                    renderGuideTab(content);
-                    break;
-                case 'WALLET':
+case 'WALLET':
                     renderWalletTab(content);
                     break;
                 case 'LISTS':
@@ -955,6 +950,7 @@ function startCloudSync() {
         
         // --- Tab: FLIGHTS_STAY (航班與住宿) 渲染 (不變) ---
         function renderFlightsStayTab(container) {
+            const flightsNote = (tripData.flights_note && String(tripData.flights_note).trim()) ? String(tripData.flights_note) : "請注意：去程CI164預計10:55抵達仁川；回程CI165為12:00起飛，請務必預留充足交通與報到時間。";
             let html = `
                 <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">✈️ 航班與住宿總覽</h2>
 
@@ -966,8 +962,32 @@ function startCloudSync() {
                         <p class="font-medium mb-2">${tripData.flights.split('；')[0].replace('去程：', '🛫 去程:')}</p>
                         <p class="font-medium">${tripData.flights.split('；')[1].replace('回程：', '🛬 回程:')}</p>
                     </div>
-                    <div class="text-xs text-gray-500 mt-3 p-2 rounded border" style="border-color: var(--color-divider);">
-                        請注意：去程CI164預計10:55抵達仁川；回程CI165為12:00起飛，請務必預留充足交通與報到時間。
+                    <div class="mt-3 p-3 rounded border" style="border-color: var(--color-divider);">
+                        <div class="flex items-center justify-between gap-2">
+                            <p class="text-xs font-semibold" style="color: var(--color-text-main);">航班備註</p>
+                            <div class="flex items-center gap-2">
+                                <button id="edit-flights-note-btn" type="button" class="muji-btn-light text-xs px-2 py-1 hover:shadow-md">
+                                    <i class="fas fa-edit mr-1"></i>編輯
+                                </button>
+                                <button id="hide-flights-note-editor-btn" type="button" class="muji-btn-light text-xs px-2 py-1 hover:shadow-md hidden">
+                                    <i class="fas fa-chevron-up mr-1"></i>收起
+                                </button>
+                            </div>
+                        </div>
+
+                        <div id="flights-note-view" class="text-xs text-gray-600 mt-2 whitespace-pre-wrap">${flightsNote}</div>
+
+                        <div id="flights-note-editor" class="mt-2 hidden">
+                            <textarea id="flights-note-input" class="w-full p-2 border rounded-lg text-xs" rows="3" style="border-color: var(--color-divider);">${flightsNote}</textarea>
+                            <div class="flex gap-2 mt-2">
+                                <button id="save-flights-note-btn" type="button" class="muji-btn text-xs px-3 py-1">
+                                    <i class="fas fa-save mr-1"></i>儲存
+                                </button>
+                                <button id="cancel-flights-note-btn" type="button" class="muji-btn-light text-xs px-3 py-1" style="border-color: var(--color-divider);">
+                                    取消
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -981,7 +1001,12 @@ function startCloudSync() {
                             <p class="font-bold text-lg mb-1" style="color: var(--color-text-main);">
                                 <span class="text-sm font-normal p-1 mr-1 rounded" style="background-color: var(--color-accent); color: white;">${acc.date}</span> ${acc.name}
                             </p>
-                            <p class="text-sm text-gray-600">${acc.address}</p>
+                            <div class="flex items-start justify-between gap-2 acc-wrap">
+                                <p class="text-sm text-gray-600 acc-address flex-1">${acc.address}</p>
+                                <button type="button" onclick="copyTextToClipboard(this.closest(\'div\').querySelector(\'.acc-address\').textContent, \'住宿地址已成功複製到剪貼簿！\')" class="muji-btn-light text-xs mt-0 px-2 py-1 inline-flex items-center shrink-0 hover:shadow-md">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                             </div>
                             <a href="${acc.mapLink}" target="_blank" class="muji-btn-light text-xs mt-2 px-2 py-1 inline-flex items-center hover:shadow-md">
                                 <i class="fas fa-location-dot mr-1"></i> 查看地圖 / 導航
                             </a>
@@ -990,6 +1015,52 @@ function startCloudSync() {
                 </div>
             `;
             container.innerHTML = html;
+            setupFlightsStayListeners();
+        }
+
+
+        // --- 航班住宿頁：備註可編輯 + 編輯欄收起 ---
+        function setupFlightsStayListeners() {
+            const view = document.getElementById('flights-note-view');
+            const editorWrap = document.getElementById('flights-note-editor');
+            const input = document.getElementById('flights-note-input');
+            const editBtn = document.getElementById('edit-flights-note-btn');
+            const hideBtn = document.getElementById('hide-flights-note-editor-btn');
+            const saveBtn = document.getElementById('save-flights-note-btn');
+            const cancelBtn = document.getElementById('cancel-flights-note-btn');
+
+            if (!view || !editorWrap || !input || !editBtn || !hideBtn || !saveBtn || !cancelBtn) return;
+
+            function openEditor() {
+                editorWrap.classList.remove('hidden');
+                hideBtn.classList.remove('hidden');
+                editBtn.classList.add('hidden');
+                input.focus();
+            }
+
+            function closeEditor(reset = true) {
+                editorWrap.classList.add('hidden');
+                hideBtn.classList.add('hidden');
+                editBtn.classList.remove('hidden');
+                if (reset) {
+                    input.value = view.textContent || '';
+                }
+            }
+
+            editBtn.onclick = openEditor;
+            hideBtn.onclick = () => closeEditor(false);
+            cancelBtn.onclick = () => closeEditor(true);
+
+            saveBtn.onclick = () => {
+                const v = (input.value || '').trim();
+                const updatedTripData = JSON.parse(JSON.stringify(tripData || {}));
+                updatedTripData.flights_note = v;
+                setTripData(updatedTripData);
+
+                view.textContent = v.length ? v : '-';
+                closeEditor(false);
+                alertModal('航班備註已更新！');
+            };
         }
 
         // --- Tab: ITINERARY (每日行程表) 渲染 (不變) ---
@@ -1028,7 +1099,12 @@ function startCloudSync() {
                             <h5 class="text-sm font-bold p-1 rounded inline-flex items-center" style="background-color: var(--color-highlight); color: var(--color-text-main);">
                                 <i class="fas fa-bed mr-1 text-base"></i> 當晚住宿：${currentAccommodation.name}
                             </h5>
-                            <p class="text-xs text-gray-600 mt-1">${currentAccommodation.address}</p>
+                            <div class="mt-1 flex items-start justify-between gap-2 stay-wrap">
+                             <p class="text-xs text-gray-600 stay-address flex-1">${currentAccommodation.address}</p>
+                             <button type="button" onclick="copyTextToClipboard(this.closest(\'div\').querySelector(\'.stay-address\').textContent, \'住宿地址已成功複製到剪貼簿！\')" class="muji-btn-light text-[11px] px-2 py-1 inline-flex items-center shrink-0 hover:shadow-md" style="border-color: var(--color-divider);">
+                                 <i class="fas fa-copy"></i>
+                             </button>
+                         </div>
                             <a href="${currentAccommodation.mapLink}" target="_blank" class="text-xs text-blue-600 hover:text-blue-800">
                                 <i class="fas fa-location-dot mr-1"></i>查看地圖
                             </a>
@@ -1349,6 +1425,18 @@ function startCloudSync() {
                     alertModal("請輸入有效的匯率。");
                 }
             });
+
+            // --- 明洞大使館匯率參考（只記錄、不中斷計算）---
+            const daesagwanInput = document.getElementById('daesagwan-rate-input');
+            if (daesagwanInput) {
+                const savedDaesagwan = getLocalStorage(daesagwanRateKey, '');
+                if (savedDaesagwan !== null && savedDaesagwan !== undefined) {
+                    daesagwanInput.value = String(savedDaesagwan);
+                }
+                const persistDaesagwan = () => setLocalStorage(daesagwanRateKey, daesagwanInput.value.trim());
+                daesagwanInput.addEventListener('input', persistDaesagwan);
+                daesagwanInput.addEventListener('change', persistDaesagwan);
+            }
 
             // --- 計算機邏輯 ---
             const display = document.getElementById('calc-display');
