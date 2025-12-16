@@ -243,7 +243,7 @@
             </button>
             <button class="nav-item flex flex-col items-center p-2" data-tab="INFO">
                 <i class="fas fa-info-circle text-xl"></i>
-                <span class="text-xs mt-1">資訊</span>
+                <span class="text-xs mt-1">資訊&備份</span>
             </button>
         </nav>
     </footer>
@@ -499,6 +499,50 @@ let cloudPollTimer = null;
 let cloudLastPushedHash = "";
 let cloudLastRemoteUpdatedAt = null;
 
+// === Event-driven cloud sync (no polling) ===
+let cloudSyncLastAt = 0;
+let cloudSyncInFlight = false;
+let cloudSyncTriggersBound = false;
+const CLOUD_MIN_SYNC_GAP_MS = 5000; // prevent rapid repeat syncs (tab spam, etc.)
+
+async function triggerCloudSync(reason = "") {
+  try {
+    if (!cloudAutoSync) return;
+    if (window.__isAppUnlocked && !window.__isAppUnlocked()) return;
+    if (!supabaseClient) {
+      supabaseClient = initSupabaseClient();
+    }
+    if (!supabaseClient) return;
+
+    const now = Date.now();
+    if (cloudSyncInFlight) return;
+    if (now - cloudSyncLastAt < CLOUD_MIN_SYNC_GAP_MS) return;
+
+    cloudSyncLastAt = now; // set early to prevent re-entrancy via refreshCurrentTab()
+    cloudSyncInFlight = true;
+
+    await pullFromCloud(false);
+    // push is debounced; this prevents writing on every tiny UI action
+    scheduleCloudPush();
+  } catch (e) {
+    console.warn("Cloud sync trigger failed:", reason, e);
+  } finally {
+    cloudSyncInFlight = false;
+  }
+}
+
+function bindCloudSyncTriggers() {
+  if (cloudSyncTriggersBound) return;
+  cloudSyncTriggersBound = true;
+
+  // 僅在回到前景時同步
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) triggerCloudSync("visibilitychange");
+  });
+}
+// === End event-driven cloud sync ===
+
+
 function _cloudGetStatus(err) {
   try {
     if (!err) return null;
@@ -559,20 +603,66 @@ function buildLocalSnapshot() {
 }
 
 async function ensureSharedDocExists() {
-  if (!supabaseClient) return;
+  // 安全版本：只在「雲端尚未有資料」時才建立，不會覆蓋既有雲端內容
+  if (!supabaseClient) return false;
   try {
-    // 若不存在就建立一筆（upsert）
-    const now = new Date().toISOString();
-    const empty = buildLocalSnapshot();
-    await supabaseClient
+    const { data, error } = await supabaseClient
       .from("shared_docs")
-      .upsert({ id: SHARED_DOC_ID, data: empty, updated_at: now }, { onConflict: "id" });
+      .select("id")
+      .eq("id", SHARED_DOC_ID)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (data && data.id) return true;
+
+    const now = new Date().toISOString();
+    const initSnap = buildLocalSnapshot();
+    // 若本機也沒有任何資料，就先不建立（避免空資料誤導）
+    if (!initSnap || Object.keys(initSnap).length === 0) return false;
+
+    const { error: insErr } = await supabaseClient
+      .from("shared_docs")
+      .insert({ id: SHARED_DOC_ID, data: initSnap, updated_at: now });
+
+    if (insErr) throw insErr;
+    return true;
   } catch (e) {
     const st = _cloudGetStatus(e);
     if (st === 401) {
       _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
     }
     console.error("[CloudSync] ensure doc failed:", e);
+    return false;
+  }
+}
+
+function isSnapshotEmpty(snap) {
+  return !snap || Object.keys(snap).length === 0;
+}
+
+async function fetchRemoteDoc() {
+  if (!supabaseClient) return null;
+  try {
+    const { data, error } = await supabaseClient
+      .from("shared_docs")
+      .select("data, updated_at")
+      .eq("id", SHARED_DOC_ID)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) return null;
+    return data;
+  } catch (e) {
+    // 0 rows / 尚未建立雲端資料：不用當成錯誤
+    if (e && (e.code === "PGRST116" || String(e.message || "").includes("Cannot coerce the result"))) {
+      return null;
+    }
+    const st = _cloudGetStatus(e);
+    if (st === 401) {
+      _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
+    }
+    console.error("[CloudSync] fetch remote failed:", e);
+    return null;
   }
 }
 
@@ -580,29 +670,49 @@ function scheduleCloudPush() {
   if (!cloudAutoSync) return;
   if (cloudApplyingRemoteSnapshot) return;
   clearTimeout(cloudPushTimer);
-  cloudPushTimer = setTimeout(pushToCloud, 800);
+  cloudPushTimer = setTimeout(() => pushToCloud(false), 800);
 }
 
-async function pushToCloud() {
+async function pushToCloud(force = false, overrideSnapshot = null) {
   if (!supabaseClient) return;
   try {
-    const snapshot = buildLocalSnapshot();
-    const hash = JSON.stringify(snapshot);
-    if (hash === cloudLastPushedHash) return;
+    const localPartial = overrideSnapshot && typeof overrideSnapshot === "object" ? overrideSnapshot : buildLocalSnapshot();
+
+    // 安全保護：自動同步時，本機完全沒資料就不推（避免把雲端洗成空/不完整）
+    if (!force && isSnapshotEmpty(localPartial)) return;
+
+    const remote = await fetchRemoteDoc();
+    const base = (remote && remote.data && typeof remote.data === "object") ? remote.data : {};
+
+    // 合併：保留雲端既有 keys，只用本機有的 keys 覆寫（避免「本機只有匯率」就把雲端其他資料清掉）
+    const merged = { ...base, ...localPartial };
+
+    // 只保留我們允許同步的 keys
+    const cleaned = {};
+    for (const k of SYNC_KEYS) {
+      if (!(k in merged)) continue;
+      const v = merged[k];
+      if (v === null || v === undefined) continue;
+      cleaned[k] = v;
+    }
+
+    if (!force && isSnapshotEmpty(cleaned)) return;
+
+    const hash = JSON.stringify(cleaned);
+    if (!force && hash === cloudLastPushedHash) return;
 
     cloudLastPushedHash = hash;
     const now = new Date().toISOString();
 
     const { data, error } = await supabaseClient
       .from("shared_docs")
-      .upsert({ id: SHARED_DOC_ID, data: snapshot, updated_at: now }, { onConflict: "id" })
+      .upsert({ id: SHARED_DOC_ID, data: cleaned, updated_at: now }, { onConflict: "id" })
       .select("updated_at")
       .maybeSingle();
 
     if (error) throw error;
     cloudLastRemoteUpdatedAt = data?.updated_at || now;
   } catch (e) {
-    // 若 RLS/授權未開，避免一直刷錯誤：自動停用同步
     const st = _cloudGetStatus(e);
     if (st === 401) {
       _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
@@ -612,55 +722,102 @@ async function pushToCloud() {
 }
 
 async function pullFromCloud(force = false) {
-  if (!supabaseClient) return;
-  try {
-    const { data, error } = await supabaseClient
-      .from("shared_docs")
-      .select("data, updated_at")
-      .eq("id", SHARED_DOC_ID)
-      .maybeSingle();
+  if (!supabaseClient) return null;
+  const remote = await fetchRemoteDoc();
+  if (!remote) return null;
 
-    if (error) throw error;
-    if (!data) return;
-
-    const remoteUpdatedAt = data.updated_at || null;
-    if (!force && remoteUpdatedAt && cloudLastRemoteUpdatedAt && remoteUpdatedAt <= cloudLastRemoteUpdatedAt) {
-      return;
-    }
-
-    // 防止自己剛推上去又被拉回來造成循環
-    cloudLastRemoteUpdatedAt = remoteUpdatedAt;
-
-    if (data.data) {
-      applyRemoteSnapshot(data.data);
-    }
-  } catch (e) {
-    // 0 rows / 尚未建立雲端資料：不用當成錯誤
-    if (e && (e.code === "PGRST116" || String(e.message || "").includes("Cannot coerce the result"))) {
-      return;
-    }
-    const st = _cloudGetStatus(e);
-    if (st === 401) {
-      _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
-    }
-    console.error("[CloudSync] pull failed:", e);
+  const remoteUpdatedAt = remote.updated_at || null;
+  if (!force && remoteUpdatedAt && cloudLastRemoteUpdatedAt && remoteUpdatedAt <= cloudLastRemoteUpdatedAt) {
+    return remote;
   }
+
+  // 防止自己剛推上去又被拉回來造成循環
+  cloudLastRemoteUpdatedAt = remoteUpdatedAt;
+
+  if (remote.data) {
+    applyRemoteSnapshot(remote.data);
+  }
+  return remote;
 }
 
 function applyRemoteSnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== "object") return;
-  for (const k of SYNC_KEYS) {
-    if (!(k in snapshot)) continue;
-    const v = snapshot[k];
-    // Never write null/undefined into localStorage; keep app defaults instead.
-    if (v === null || v === undefined) continue;
-    try {
-      localStorage.setItem(k, JSON.stringify(v));
-    } catch (e) {}
+  cloudApplyingRemoteSnapshot = true;
+  try {
+    for (const k of SYNC_KEYS) {
+      if (!(k in snapshot)) continue;
+      const v = snapshot[k];
+      // Never write null/undefined into localStorage; keep app defaults instead.
+      if (v === null || v === undefined) continue;
+      try {
+        localStorage.setItem(k, JSON.stringify(v));
+      } catch (e) {}
+    }
+  } finally {
+    cloudApplyingRemoteSnapshot = false;
   }
 }
 
-function startCloudSync() {
+function mergeExpensesArrays(remoteArr, localArr) {
+  const r = Array.isArray(remoteArr) ? remoteArr : [];
+  const l = Array.isArray(localArr) ? localArr : [];
+  if (r.length === 0 && l.length === 0) return remoteArr || localArr || [];
+
+  const map = new Map();
+  const toTime = (x) => {
+    const s = (x && (x.lastModifiedAt || x.modifiedAt || x.updatedAt || x.timestamp || x.createdAt)) ? String(x.lastModifiedAt || x.modifiedAt || x.updatedAt || x.timestamp || x.createdAt) : "";
+    const t = Date.parse(s);
+    return Number.isFinite(t) ? t : 0;
+  };
+  const put = (e) => {
+    if (!e || typeof e !== "object") return;
+    const id = e.id;
+    if (id === null || id === undefined) return;
+    const prev = map.get(id);
+    if (!prev) {
+      map.set(id, e);
+      return;
+    }
+    const tPrev = toTime(prev);
+    const tNew = toTime(e);
+    if (tNew >= tPrev) map.set(id, e);
+  };
+
+  r.forEach(put);
+  l.forEach(put);
+
+  return Array.from(map.values());
+}
+
+function mergeSnapshotsPreferRemote(remoteSnap, localSnap) {
+  const remoteObj = (remoteSnap && typeof remoteSnap === "object") ? remoteSnap : {};
+  const localObj = (localSnap && typeof localSnap === "object") ? localSnap : {};
+
+  const merged = { ...remoteObj };
+
+  // 只用本機去補「雲端沒有的 key」（避免覆蓋雲端）
+  for (const k of SYNC_KEYS) {
+    if (k in merged) continue;
+    if (k in localObj) merged[k] = localObj[k];
+  }
+
+  // 記帳合併：以 id 合併兩邊的 expenses，保留較新的那筆
+  if (expensesKey in remoteObj || expensesKey in localObj) {
+    merged[expensesKey] = mergeExpensesArrays(remoteObj[expensesKey], localObj[expensesKey]);
+  }
+
+  return merged;
+}
+
+function refreshCurrentTab() {
+  try {
+    const active = document.querySelector(".nav-item.active");
+    const tab = active ? active.getAttribute("data-tab") : null;
+    if (tab) changeTab(tab);
+  } catch (e) {}
+}
+
+async function startCloudSync() {
   if (!cloudAutoSync) return;
 
   // 只在解鎖後開始同步（避免被未授權者一直打 API）
@@ -671,21 +828,56 @@ function startCloudSync() {
   }
   if (!supabaseClient) return;
 
-  ensureSharedDocExists().then(() => pullFromCloud(true));
+  // 先記下本機快照（用於和雲端做安全合併）
+  const localBefore = buildLocalSnapshot();
+
+  // 先拉雲端（pull-first），避免本機空資料覆蓋雲端
+  const remote = await fetchRemoteDoc();
+
+  if (remote && remote.data && typeof remote.data === "object") {
+    const remoteSnap = remote.data;
+
+    // 合併：遠端為主，僅補上本機缺的；expenses 會做 id 合併
+    const mergedSnap = mergeSnapshotsPreferRemote(remoteSnap, localBefore);
+
+    applyRemoteSnapshot(mergedSnap);
+    cloudLastRemoteUpdatedAt = remote.updated_at || cloudLastRemoteUpdatedAt;
+
+    // 避免第一次同步後畫面不更新
+    refreshCurrentTab();
+
+    // 若合併後比雲端多（例如本機多了幾筆記帳），推一次回雲端做統一
+    try {
+      const a = JSON.stringify(mergedSnap);
+      const b = JSON.stringify(remoteSnap);
+      if (a !== b) {
+        await pushToCloud(true, mergedSnap);
+      } else {
+        cloudLastPushedHash = b;
+      }
+    } catch (e) {}
+  } else {
+    // 雲端尚無資料：只有在本機真的有資料時才建立/上傳
+    if (!isSnapshotEmpty(localBefore)) {
+      await pushToCloud(true, localBefore);
+    }
+  }
 
   clearInterval(cloudPollTimer);
-  cloudPollTimer = setInterval(() => pullFromCloud(false), 15000);
+  cloudPollTimer = null;
+  bindCloudSyncTriggers();
 }
+
 
 // 解鎖後自動啟動同步
 (function bindUnlockHook() {
   const prev = window.__onAppUnlocked;
   window.__onAppUnlocked = function () {
     try { if (typeof prev === "function") prev(); } catch (e) {}
-    startCloudSync();
+    startCloudSync().catch(() => {});
   };
   // 如果一開始就已經解鎖，直接啟動
-  try { if (window.__isAppUnlocked && window.__isAppUnlocked()) startCloudSync(); } catch (e) {}
+  try { if (window.__isAppUnlocked && window.__isAppUnlocked()) startCloudSync().catch(() => {}); } catch (e) {}
 })();
 
 // setLocalStorage 包一層：每次寫入 localStorage，就自動排程推雲端
@@ -968,6 +1160,10 @@ case 'WALLET':
                     renderInfoTab(content);
                     break;
             }
+
+
+            // 切頁時同步（僅在回到前景 / 切頁觸發，不做輪詢）
+            triggerCloudSync("tab:" + tabName);
         }
         
         // --- Tab: FLIGHTS_STAY (航班與住宿) 渲染 (不變) ---
@@ -1361,97 +1557,97 @@ case 'WALLET':
             renderExpenseList();
         }
 
-        function renderConvertTab(container) {
-            const rateRecord = getLocalStorage(daesagwanRateKey, '');
-            const rateRecordNote = getLocalStorage(rateRecordNoteKey, '');
+        
+function renderConvertTab(container) {
+    const rateRecord = getLocalStorage(daesagwanRateKey, '');
+    const rateRecordNote = getLocalStorage(rateRecordNoteKey, '');
 
-            let html = `
-                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💱 換算</h2>
+    let html = `
+        <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💱 換算</h2>
 
-                <div class="muji-card p-4 mb-6">
-                    <div class="flex items-center justify-between gap-2">
-                        <h3 class="text-lg font-semibold flex items-center" style="color: var(--color-text-main);">
-                            <i class="fas fa-clipboard-list mr-2 text-xl" style="color: var(--color-accent);"></i> 匯率紀錄
-                        </h3>
-                    </div>
+        <div class="muji-card p-4 mb-6">
+            <div class="flex items-center justify-between gap-2">
+                <h3 class="text-lg font-semibold flex items-center" style="color: var(--color-text-main);">
+                    <i class="fas fa-clipboard-list mr-2 text-xl" style="color: var(--color-accent);"></i> 匯率紀錄
+                </h3>
+            </div>
 
-                    <label for="daesagwan-rate-input" class="block text-sm font-medium mb-1 mt-3" style="color: var(--color-text-main);">匯率紀錄 (VND/TWD)：</label>
-                    <input type="text" id="daesagwan-rate-input" class="w-full p-2 mb-3 border rounded-lg text-sm" placeholder="e.g. 0.0013 (僅供紀錄)" style="border-color: var(--color-divider);" value="${String(rateRecord || '')}">
+            <label for="daesagwan-rate-input" class="block text-sm font-medium mb-1 mt-3" style="color: var(--color-text-main);">匯率紀錄 (VND/TWD)：</label>
+            <input type="text" id="daesagwan-rate-input" class="w-full p-2 mb-3 border rounded-lg text-sm" placeholder="e.g. 0.0013 (僅供紀錄)" style="border-color: var(--color-divider);" value="${String(rateRecord || '')}">
 
-                    <div class="p-3 rounded border" style="border-color: var(--color-divider);">
-                        <div class="flex items-center justify-between gap-2">
-                            <p class="text-xs font-semibold" style="color: var(--color-text-main);">備註</p>
-                            <div class="flex items-center gap-2">
-                                <button id="edit-rate-record-note-btn" type="button" class="muji-btn-light text-xs px-2 py-1 hover:shadow-md">
-                                    <i class="fas fa-edit mr-1"></i>編輯
-                                </button>
-                                <button id="hide-rate-record-note-editor-btn" type="button" class="muji-btn-light text-xs px-2 py-1 hover:shadow-md hidden">
-                                    <i class="fas fa-chevron-up mr-1"></i>收起
-                                </button>
-                            </div>
-                        </div>
-
-                        <div id="rate-record-note-view" class="text-xs text-gray-600 mt-2 whitespace-pre-wrap">${(rateRecordNote && String(rateRecordNote).trim()) ? String(rateRecordNote) : '-'}</div>
-
-                        <div id="rate-record-note-editor" class="mt-2 hidden">
-                            <textarea id="rate-record-note-input" class="w-full p-2 border rounded-lg text-xs" rows="3" style="border-color: var(--color-divider);">${String(rateRecordNote || '')}</textarea>
-                            <div class="flex gap-2 mt-2">
-                                <button id="save-rate-record-note-btn" type="button" class="muji-btn text-xs px-3 py-1">
-                                    <i class="fas fa-save mr-1"></i>儲存
-                                </button>
-                                <button id="cancel-rate-record-note-btn" type="button" class="muji-btn-light text-xs px-3 py-1" style="border-color: var(--color-divider);">
-                                    取消
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-</div>
-
-                <div class="muji-card p-4 mb-6">
-                    <h3 class="text-lg font-semibold mb-3" style="color: var(--color-text-main);">匯率換算機 (VND → TWD)</h3>
-                    <div class="flex space-x-2 mb-2">
-                        <input type="number" id="rate-input" value="${Number(currentRate).toFixed(4)}" step="0.0001" class="w-1/3 p-2 border rounded-lg focus:ring-1 focus:ring-red-300" placeholder="0.0013" style="border-color: var(--color-divider); color: var(--color-text-main);">
-                        <button id="set-rate-btn" class="muji-btn text-sm w-2/3">設定當前 VND/TWD 匯率</button>
-                    </div>
-                    <p class="text-xs text-gray-500 mb-3">備註：記得點選設定鈕才會更新</p>
-
-                    <div class="grid grid-cols-4 gap-2 p-3 rounded-lg" style="background-color: var(--color-bg-primary);">
-                        <input type="text" id="calc-display" class="col-span-4 text-right text-2xl p-2 mb-2 rounded border font-mono bg-white" value="0" readonly style="border-color: var(--color-divider);">
-                        <div id="calc-result" class="col-span-4 text-right text-sm text-gray-500">
-                            ${TWD_SYMBOL} <span id="calc-twd-result">0.000</span>
-                        </div>
-
-                        <button class="calc-btn muji-btn-light text-xl" data-value="C" style="background-color: var(--color-divider);">C</button>
-                        <button class="calc-btn muji-btn-light text-xl" data-value="back"><i class="fas fa-backspace"></i></button>
-                        <button class="calc-btn muji-btn-light text-xl" data-value="/">÷</button>
-                        <button class="calc-btn muji-btn-light text-xl" data-value="*">×</button>
-
-                        <button class="calc-btn muji-btn text-xl" data-value="7">7</button>
-                        <button class="calc-btn muji-btn text-xl" data-value="8">8</button>
-                        <button class="calc-btn muji-btn text-xl" data-value="9">9</button>
-                        <button class="calc-btn muji-btn-light text-xl" data-value="-">−</button>
-
-                        <button class="calc-btn muji-btn text-xl" data-value="4">4</button>
-                        <button class="calc-btn muji-btn text-xl" data-value="5">5</button>
-                        <button class="calc-btn muji-btn text-xl" data-value="6">6</button>
-                        <button class="calc-btn muji-btn-light text-xl" data-value="+">&plus;</button>
-
-                        <button class="calc-btn muji-btn text-xl" data-value="1">1</button>
-                        <button class="calc-btn muji-btn text-xl" data-value="2">2</button>
-                        <button class="calc-btn muji-btn text-xl" data-value="3">3</button>
-                        <button class="calc-btn muji-btn-light text-xl row-span-2" data-value="=">=</button>
-
-                        <button class="calc-btn muji-btn text-xl" data-value="00">00</button>
-                        <button class="calc-btn muji-btn text-xl" data-value="0">0</button>
-                        <button class="calc-btn muji-btn text-xl" data-value=".">.</button>
+            <div class="p-3 rounded border" style="border-color: var(--color-divider);">
+                <div class="flex items-center justify-between gap-2">
+                    <p class="text-xs font-semibold" style="color: var(--color-text-main);">備註</p>
+                    <div class="flex items-center gap-2">
+                        <button id="edit-rate-record-note-btn" type="button" class="muji-btn-light text-xs px-2 py-1 hover:shadow-md">
+                            <i class="fas fa-edit mr-1"></i>編輯
+                        </button>
+                        <button id="hide-rate-record-note-editor-btn" type="button" class="muji-btn-light text-xs px-2 py-1 hover:shadow-md hidden">
+                            <i class="fas fa-chevron-up mr-1"></i>收起
+                        </button>
                     </div>
                 </div>
 
-                
-            `;
-            container.innerHTML = html;
-            setupConvertListeners();
-        }
+                <div id="rate-record-note-view" class="text-xs text-gray-600 mt-2 whitespace-pre-wrap">${(rateRecordNote && String(rateRecordNote).trim()) ? String(rateRecordNote) : '-'}</div>
+
+                <div id="rate-record-note-editor" class="mt-2 hidden">
+                    <textarea id="rate-record-note-input" class="w-full p-2 border rounded-lg text-xs" rows="3" style="border-color: var(--color-divider);">${String(rateRecordNote || '')}</textarea>
+                    <div class="flex gap-2 mt-2">
+                        <button id="save-rate-record-note-btn" type="button" class="muji-btn text-xs px-3 py-1">
+                            <i class="fas fa-save mr-1"></i>儲存
+                        </button>
+                        <button id="cancel-rate-record-note-btn" type="button" class="muji-btn-light text-xs px-3 py-1" style="border-color: var(--color-divider);">
+                            取消
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="muji-card p-4 mb-6">
+            <h3 class="text-lg font-semibold mb-3" style="color: var(--color-text-main);">匯率換算機 (VND → TWD)</h3>
+            <div class="flex space-x-2 mb-2">
+                <input type="number" id="rate-input" value="${Number(currentRate).toFixed(4)}" step="0.0001" class="w-1/3 p-2 border rounded-lg focus:ring-1 focus:ring-red-300" placeholder="0.0013" style="border-color: var(--color-divider); color: var(--color-text-main);">
+                <button id="set-rate-btn" class="muji-btn text-sm w-2/3">設定當前 VND/TWD 匯率</button>
+            </div>
+            <p class="text-xs text-gray-500 mb-3">備註：記得點選設定鈕才會更新</p>
+
+            <div class="grid grid-cols-4 gap-2 p-3 rounded-lg" style="background-color: var(--color-bg-primary);">
+                <input type="text" id="calc-display" class="col-span-4 text-right text-2xl p-2 mb-2 rounded border font-mono bg-white" value="0" readonly style="border-color: var(--color-divider);">
+                <div id="calc-result" class="col-span-4 text-right text-sm text-gray-500">
+                    ${TWD_SYMBOL} <span id="calc-twd-result">0.000</span>
+                </div>
+
+                <button class="calc-btn muji-btn-light text-xl" data-value="C" style="background-color: var(--color-divider);">C</button>
+                <button class="calc-btn muji-btn-light text-xl" data-value="back"><i class="fas fa-backspace"></i></button>
+                <button class="calc-btn muji-btn-light text-xl" data-value="/">÷</button>
+                <button class="calc-btn muji-btn-light text-xl" data-value="*">×</button>
+
+                <button class="calc-btn muji-btn text-xl" data-value="7">7</button>
+                <button class="calc-btn muji-btn text-xl" data-value="8">8</button>
+                <button class="calc-btn muji-btn text-xl" data-value="9">9</button>
+                <button class="calc-btn muji-btn-light text-xl" data-value="-">−</button>
+
+                <button class="calc-btn muji-btn text-xl" data-value="4">4</button>
+                <button class="calc-btn muji-btn text-xl" data-value="5">5</button>
+                <button class="calc-btn muji-btn text-xl" data-value="6">6</button>
+                <button class="calc-btn muji-btn-light text-xl" data-value="+">&plus;</button>
+
+                <button class="calc-btn muji-btn text-xl" data-value="1">1</button>
+                <button class="calc-btn muji-btn text-xl" data-value="2">2</button>
+                <button class="calc-btn muji-btn text-xl" data-value="3">3</button>
+                <button class="calc-btn muji-btn-light text-xl row-span-2" data-value="=">=</button>
+
+                <button class="calc-btn muji-btn text-xl" data-value="00">00</button>
+                <button class="calc-btn muji-btn text-xl" data-value="0">0</button>
+                <button class="calc-btn muji-btn text-xl" data-value=".">.</button>
+            </div>
+        </div>
+    `;
+    container.innerHTML = html;
+    setupConvertListeners();
+}
+
 
 
 
@@ -1840,7 +2036,8 @@ case 'WALLET':
                 spentAt: finalSpentAt,
                 note: note,
                 consumers,
-                payers
+                payers,
+                lastModifiedAt: new Date().toISOString()
             };
 
             setLocalStorage(expensesKey, expenses);
@@ -1954,6 +2151,166 @@ case 'WALLET':
         }
 
 
+
+// --- 備份 / 雲端同步（位於「資訊&備份」頁）---
+function setupBackupCloudSyncListeners() {
+
+            function updateCloudStatusLabel() {
+                const el = document.getElementById('cloud-sync-status');
+                if (!el) return;
+                let label = '未啟動';
+                try {
+                    if (!cloudAutoSync) label = '已停用';
+                    else if (window.__isAppUnlocked && !window.__isAppUnlocked()) label = '未解鎖';
+                    else if (!supabaseClient) label = '待初始化';
+                    else label = '啟用中';
+                } catch (e) {}
+                el.textContent = label;
+            }
+            updateCloudStatusLabel();
+
+            // 備份內容說明：按鈕展開/收合
+            const backupToggleBtn = document.getElementById('backup-contents-toggle');
+            const backupPanel = document.getElementById('backup-contents-panel');
+            if (backupToggleBtn && backupPanel) {
+                backupToggleBtn.addEventListener('click', () => {
+                    const isHidden = backupPanel.classList.contains('hidden');
+                    backupPanel.classList.toggle('hidden');
+                    backupToggleBtn.innerHTML = isHidden
+                        ? '<i class="fas fa-chevron-up mr-2"></i>收合備份內容'
+                        : '<i class="fas fa-circle-info mr-2"></i>查看備份內容';
+                });
+            }
+
+
+            const exportBtn = document.getElementById('export-backup-btn');
+            if (exportBtn) {
+                exportBtn.addEventListener('click', () => {
+                    try {
+                        const snapshot = buildLocalSnapshot();
+                        const payload = {
+                            app: APP_ID,
+                            exportedAt: new Date().toISOString(),
+                            sharedDocId: SHARED_DOC_ID,
+                            data: snapshot
+                        };
+                        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                        const a = document.createElement('a');
+                        const ts = new Date();
+                        const pad = (n) => String(n).padStart(2, '0');
+                        const name = `vn_trip_backup_${ts.getFullYear()}${pad(ts.getMonth()+1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}.json`;
+                        a.href = URL.createObjectURL(blob);
+                        a.download = name;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+                        alertModal('已匯出備份檔（JSON）。');
+                    } catch (e) {
+                        console.error(e);
+                        alertModal('匯出失敗，請稍後再試。');
+                    }
+                });
+            }
+
+            const importBtn = document.getElementById('import-backup-btn');
+            if (importBtn) {
+                importBtn.addEventListener('click', () => {
+                    const fileInput = document.getElementById('import-backup-file');
+                    const file = fileInput && fileInput.files ? fileInput.files[0] : null;
+                    if (!file) {
+                        alertModal('請先選擇要匯入的 JSON 備份檔。');
+                        return;
+                    }
+                    if (!confirm('確定要匯入備份嗎？這會覆蓋本機目前的資料（建議先匯出一份備份）。')) return;
+
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        try {
+                            const obj = JSON.parse(String(reader.result || '{}'));
+                            const data = obj && obj.data && typeof obj.data === 'object' ? obj.data : null;
+                            if (!data) {
+                                alertModal('備份檔格式不正確（缺少 data）。');
+                                return;
+                            }
+
+                            cloudApplyingRemoteSnapshot = true;
+                            try {
+                                for (const k of SYNC_KEYS) {
+                                    if (!(k in data)) continue;
+                                    const v = data[k];
+                                    if (v === null || v === undefined) continue;
+                                    try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {}
+                                }
+                            } finally {
+                                cloudApplyingRemoteSnapshot = false;
+                            }
+
+                            refreshCurrentTab();
+                            alertModal('已匯入備份到本機。需要雲端同步時，可再按「上傳本機到雲端」。');
+                        } catch (e) {
+                            console.error(e);
+                            alertModal('匯入失敗：備份檔可能不是有效的 JSON。');
+                        } finally {
+                            try { fileInput.value = ''; } catch (e) {}
+                        }
+                    };
+                    reader.readAsText(file);
+                });
+            }
+
+            const cloudPullBtn = document.getElementById('cloud-pull-btn');
+            if (cloudPullBtn) {
+                cloudPullBtn.addEventListener('click', async () => {
+                    try {
+                        if (window.__isAppUnlocked && !window.__isAppUnlocked()) {
+                            alertModal('請先解鎖後再進行雲端同步。');
+                            return;
+                        }
+                        if (!supabaseClient) supabaseClient = initSupabaseClient();
+                        if (!supabaseClient) {
+                            alertModal('雲端同步尚未初始化（Supabase 未載入）。');
+                            return;
+                        }
+                        const remote = await pullFromCloud(true);
+                        refreshCurrentTab();
+                        if (remote && remote.data) alertModal('已從雲端更新本機。');
+                        else alertModal('雲端尚未有資料可拉取。');
+                        updateCloudStatusLabel();
+                    } catch (e) {
+                        console.error(e);
+                        alertModal('從雲端更新失敗。');
+                    }
+                });
+            }
+
+            const cloudPushBtn = document.getElementById('cloud-push-btn');
+            if (cloudPushBtn) {
+                cloudPushBtn.addEventListener('click', async () => {
+                    try {
+                        if (window.__isAppUnlocked && !window.__isAppUnlocked()) {
+                            alertModal('請先解鎖後再進行雲端同步。');
+                            return;
+                        }
+                        if (!supabaseClient) supabaseClient = initSupabaseClient();
+                        if (!supabaseClient) {
+                            alertModal('雲端同步尚未初始化（Supabase 未載入）。');
+                            return;
+                        }
+                        if (!confirm('確定要上傳本機資料到雲端嗎？（建議先按「匯出備份」）')) return;
+                        await pushToCloud(true);
+                        updateCloudStatusLabel();
+                        alertModal('已上傳本機資料到雲端。');
+                    } catch (e) {
+                        console.error(e);
+                        alertModal('上傳雲端失敗。');
+                    }
+                });
+            }
+        }
+
+
+
         function setupWalletListeners() {// --- 記帳功能 ---
             const photoInput = document.getElementById('expense-photo');
             let base64Photo = null;
@@ -2025,6 +2382,7 @@ case 'WALLET':
                     photo: base64Photo,
                     // created time (for debugging/legacy), and spentAt for sorting/grouping
                     timestamp: new Date().toISOString(),
+                    lastModifiedAt: new Date().toISOString(),
                     spentAt: spentAt
                                     ,note: note
 };
@@ -2418,7 +2776,7 @@ case 'WALLET':
              const editLinks = (Array.isArray(localLinks) && localLinks.length) ? localLinks : [{ text: "", url: "" }];
 
             let html = `
-                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💡 旅遊實用資訊</h2>
+                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💡 資訊&備份</h2>
 
                 <div class="muji-card p-4 mb-6">
                     <div class="flex items-center justify-between gap-2 border-b pb-2" style="border-color: var(--color-divider);">
@@ -2580,8 +2938,65 @@ case 'WALLET':
                     <div class="mt-4 p-3 rounded-lg" id="memo-info-output" style="background-color: var(--color-bg-primary);">
                         </div>
                 </div>
+<div class="muji-card p-4 mb-6">
+    <h3 class="text-lg font-semibold mb-2 flex items-center" style="color: var(--color-text-main);">
+        <i class="fas fa-database mr-2 text-xl" style="color: var(--color-accent);"></i> 備份 / 雲端同步
+    </h3>
+    <p class="text-xs text-gray-500 mb-3">建議：更新版本、換裝置或清除瀏覽器資料前，先匯出備份。</p>
+    <div class="mb-3">
+        <button id="backup-contents-toggle" type="button"
+                class="muji-btn-light text-xs px-3 py-2 w-full"
+                style="border-color: var(--color-divider);">
+            <i class="fas fa-circle-info mr-2"></i>查看備份內容
+        </button>
 
-                <div class="muji-card p-4">
+        <div id="backup-contents-panel" class="hidden mt-2 p-3 rounded border"
+             style="border-color: var(--color-divider); background-color: var(--color-bg-primary);">
+            <div class="text-[11px] font-semibold mb-2" style="color: var(--color-text-main);">備份會包含：</div>
+            <ul class="text-[11px] text-gray-600 list-disc pl-5 space-y-1">
+                <li>記帳資料：消費時間、項目、金額、誰消費、備註、每日/旅遊總計等</li>
+                <li>匯率相關：匯率設定、匯率紀錄與換算機輸入</li>
+                <li>清單/備忘：行前清單勾選、備忘錄內容、資訊頁備註</li>
+                <li>行程/住宿/航班等：你在 App 內有編輯或儲存的內容</li>
+                <li>當地資訊連結：你新增或修改的連結清單</li>
+            </ul>
+            <div class="mt-2 text-[11px] text-gray-500">提醒：備份只包含本 App 儲存在瀏覽器裡的資料，不包含你裝置上的外部檔案。</div>
+        </div>
+    </div>
+
+
+    <div class="grid grid-cols-1 gap-3">
+        <button id="export-backup-btn" type="button" class="muji-btn">
+            <i class="fas fa-file-export mr-2"></i>匯出備份（JSON）
+        </button>
+
+        <div class="p-3 rounded border" style="border-color: var(--color-divider); background-color: white;">
+            <p class="text-xs font-semibold mb-2" style="color: var(--color-text-main);">匯入備份</p>
+            <div class="flex items-center gap-2">
+                <input id="import-backup-file" type="file" accept=".json,application/json" class="w-full text-xs">
+                <button id="import-backup-btn" type="button" class="muji-btn-light text-xs px-3 py-2" style="border-color: var(--color-divider);">
+                    <i class="fas fa-file-import mr-1"></i>匯入
+                </button>
+            </div>
+            <p class="text-[11px] text-gray-500 mt-2">匯入會以備份內容覆蓋本機資料（可再手動上傳到雲端）。</p>
+        </div>
+
+        <div class="p-3 rounded border" style="border-color: var(--color-divider); background-color: white;">
+            <div class="flex items-center justify-between">
+                <p class="text-xs font-semibold" style="color: var(--color-text-main);">雲端同步</p>
+                <span id="cloud-sync-status" class="text-[11px] px-2 py-1 rounded-full border" style="border-color: var(--color-divider); background-color: var(--color-bg-primary); color: var(--color-text-main);">未啟動</span>
+            </div>
+            <div class="flex gap-2 mt-3 flex-wrap">
+                <button id="cloud-pull-btn" type="button" class="muji-btn-light text-xs px-3 py-2" style="border-color: var(--color-divider);">
+                    <i class="fas fa-cloud-download-alt mr-1"></i>從雲端更新本機
+                </button>
+                <button id="cloud-push-btn" type="button" class="muji-btn-light text-xs px-3 py-2" style="border-color: var(--color-divider);">
+                    <i class="fas fa-cloud-upload-alt mr-1"></i>上傳本機到雲端
+                </button>
+            </div>
+            <p class="text-[11px] text-gray-500 mt-2">🔻「從雲端更新本機」：第一次在新裝置使用、或你覺得本機資料不是最新時使用（先拉雲端再開始編輯）。<br>🔺「上傳本機到雲端」：你在本機新增/編輯後想立刻讓其他裝置看到更新；或你剛「匯入備份」後，要把這台的內容同步到雲端時使用。</p>
+        </div>
+    </div>
 </div>
             `;
             container.innerHTML = html;
@@ -2695,8 +3110,10 @@ case 'WALLET':
                 };
             }
 
-
+            // 備份 / 雲端同步（位於本頁）
+            setupBackupCloudSyncListeners();
         }
+
 
 
         // --- Custom Alert Modal (取代 alert()) ---
