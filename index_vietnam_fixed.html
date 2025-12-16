@@ -233,6 +233,10 @@
                 <i class="fas fa-calculator text-xl"></i>
                 <span class="text-xs mt-1">記帳</span>
             </button>
+            <button class="nav-item flex flex-col items-center p-2" data-tab="CONVERT">
+                <i class="fas fa-right-left text-xl"></i>
+                <span class="text-xs mt-1">換算</span>
+            </button>
             <button class="nav-item flex flex-col items-center p-2" data-tab="LISTS">
                 <i class="fas fa-list-check text-xl"></i>
                 <span class="text-xs mt-1">清單</span>
@@ -954,6 +958,9 @@ function startCloudSync() {
 case 'WALLET':
                     renderWalletTab(content);
                     break;
+                case 'CONVERT':
+                    renderConvertTab(content);
+                    break;
                 case 'LISTS':
                     renderListsTab(content);
                     break;
@@ -1294,15 +1301,72 @@ case 'WALLET':
         function renderWalletTab(container) {
             // 載入記帳資料
             let expenses = getLocalStorage(expensesKey, []);
-
-            const rateRecord = getLocalStorage(daesagwanRateKey, '');
-            const rateRecordNote = getLocalStorage(rateRecordNoteKey, '');
-
             const PEOPLE_MULTI = ['欣', '珈', '芷', '湘', '全體'];
             const PAYERS_MULTI = ['欣', '珈', '芷', '湘', '各自'];
 
             let html = `
-                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💰 記帳與匯率中心</h2>
+                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💰 記帳</h2>
+<div class="muji-card p-4 mb-6">
+                    <h3 class="text-lg font-semibold mb-3" style="color: var(--color-text-main);">新增一筆開銷</h3>
+
+                    <select id="expense-category" class="w-full p-2 mb-2 border rounded-lg" style="border-color: var(--color-divider);">
+                        ${EXPENSE_CATEGORIES.map(cat => `<option value="${cat.key}">${cat.name}</option>`).join('')}
+                    </select>
+
+                    
+                    <label for="expense-time" class="block text-sm font-medium mt-3 mb-1" style="color: var(--color-text-main);">消費時間（可自行編輯）</label>
+                    <input type="datetime-local" id="expense-time" class="w-full p-2 mb-2 border rounded-lg text-sm" style="border-color: var(--color-divider);">
+                    <p class="text-xs text-gray-500 mb-2">會用這個時間做排序與分日（記帳歷史會依天分區）。</p>
+<input type="text" id="expense-item" class="w-full p-2 mb-2 border rounded-lg" placeholder="品項名稱 (e.g. 午餐、咖啡)" style="border-color: var(--color-divider);">
+                    <input type="number" id="expense-krw" class="w-full p-2 mb-2 border rounded-lg" placeholder="越南盾金額 VND(đ)" style="border-color: var(--color-divider);">
+                    <input type="text" id="expense-note" class="w-full p-2 mb-2 border rounded-lg" placeholder="備註（可自由填寫）" style="border-color: var(--color-divider);">
+
+                    <div class="mt-2">
+                        <p class="text-sm font-medium mb-1" style="color: var(--color-text-main);">誰消費（可複選）</p>
+                        <div class="flex flex-wrap gap-2">
+                            ${PEOPLE_MULTI.map(p => `
+                                <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
+                                    <input type="checkbox" class="consume-checkbox h-4 w-4" value="${p}">
+                                    <span>${p}</span>
+                                </label>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <div class="mt-3">
+                        <p class="text-sm font-medium mb-1" style="color: var(--color-text-main);">誰結帳（可複選）</p>
+                        <div class="flex flex-wrap gap-2">
+                            ${PAYERS_MULTI.map(p => `
+                                <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
+                                    <input type="checkbox" class="payer-checkbox h-4 w-4" value="${p}">
+                                    <span>${p}</span>
+                                </label>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <label class="block text-sm font-medium mt-3 mb-2" style="color: var(--color-text-main);">上傳或拍照 (壓縮為縮圖)</label>
+                    <input type="file" id="expense-photo" accept="image/*" class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold" style="--file-bg: var(--color-accent); --file-text: var(--color-text-main);" onMouseOver="this.style.backgroundColor='var(--color-highlight)'" onMouseOut="this.style.backgroundColor='var(--color-bg-primary)'">
+                    <div id="photo-preview" class="mt-2 text-center text-sm text-gray-400">（圖片壓縮後不會佔用太多容量，有照片時不會顯示分類圖示）</div>
+
+                    <button id="add-expense-btn" class="muji-btn w-full mt-4">紀錄開銷</button>
+                </div>
+
+                <h3 class="text-xl font-bold mb-3" style="color: var(--color-text-main);">📜 記帳歷史</h3>
+                <div id="expense-list-container">
+                    ${expenses.length === 0 ? '<p class="text-center text-gray-500 p-4">目前沒有記帳紀錄。</p>' : ''}
+                </div>`;
+            container.innerHTML = html;
+            setupWalletListeners();
+            renderExpenseList();
+        }
+
+        function renderConvertTab(container) {
+            const rateRecord = getLocalStorage(daesagwanRateKey, '');
+            const rateRecordNote = getLocalStorage(rateRecordNoteKey, '');
+
+            let html = `
+                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💱 換算</h2>
 
                 <div class="muji-card p-4 mb-6">
                     <div class="flex items-center justify-between gap-2">
@@ -1383,119 +1447,309 @@ case 'WALLET':
                     </div>
                 </div>
 
-                <div class="muji-card p-4 mb-6">
-                    <h3 class="text-lg font-semibold mb-3" style="color: var(--color-text-main);">新增一筆開銷</h3>
-
-                    <select id="expense-category" class="w-full p-2 mb-2 border rounded-lg" style="border-color: var(--color-divider);">
-                        ${EXPENSE_CATEGORIES.map(cat => `<option value="${cat.key}">${cat.name}</option>`).join('')}
-                    </select>
-
-                    <input type="text" id="expense-item" class="w-full p-2 mb-2 border rounded-lg" placeholder="品項名稱 (e.g. 午餐、咖啡)" style="border-color: var(--color-divider);">
-                    <input type="number" id="expense-krw" class="w-full p-2 mb-2 border rounded-lg" placeholder="越南盾金額 VND(đ)" style="border-color: var(--color-divider);">
-
-                    <div class="mt-2">
-                        <p class="text-sm font-medium mb-1" style="color: var(--color-text-main);">誰消費（可複選）</p>
-                        <div class="flex flex-wrap gap-2">
-                            ${PEOPLE_MULTI.map(p => `
-                                <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
-                                    <input type="checkbox" class="consume-checkbox h-4 w-4" value="${p}">
-                                    <span>${p}</span>
-                                </label>
-                            `).join('')}
-                        </div>
-                    </div>
-
-                    <div class="mt-3">
-                        <p class="text-sm font-medium mb-1" style="color: var(--color-text-main);">誰結帳（可複選）</p>
-                        <div class="flex flex-wrap gap-2">
-                            ${PAYERS_MULTI.map(p => `
-                                <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
-                                    <input type="checkbox" class="payer-checkbox h-4 w-4" value="${p}">
-                                    <span>${p}</span>
-                                </label>
-                            `).join('')}
-                        </div>
-                    </div>
-
-                    <label class="block text-sm font-medium mt-3 mb-2" style="color: var(--color-text-main);">上傳或拍照 (壓縮為縮圖)</label>
-                    <input type="file" id="expense-photo" accept="image/*" class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold" style="--file-bg: var(--color-accent); --file-text: var(--color-text-main);" onMouseOver="this.style.backgroundColor='var(--color-highlight)'" onMouseOut="this.style.backgroundColor='var(--color-bg-primary)'">
-                    <div id="photo-preview" class="mt-2 text-center text-sm text-gray-400">（圖片壓縮後不會佔用太多容量，有照片時不會顯示分類圖示）</div>
-
-                    <button id="add-expense-btn" class="muji-btn w-full mt-4">紀錄開銷</button>
-                </div>
-
-                <h3 class="text-xl font-bold mb-3" style="color: var(--color-text-main);">📜 記帳歷史</h3>
-                <div id="expense-list-container">
-                    ${expenses.length === 0 ? '<p class="text-center text-gray-500 p-4">目前沒有記帳紀錄。</p>' : ''}
-                </div>
+                
             `;
             container.innerHTML = html;
-            setupWalletListeners();
-            renderExpenseList();
+            setupConvertListeners();
         }
 
+
+
         // 渲染記帳歷史列表 (更新: 顯示分類圖示和刪除按鈕)
+        
+        // 渲染記帳歷史列表（更新：依「消費時間」排序、依天分區、顯示旅遊總計與分攤到個人）
         function renderExpenseList() {
             const container = document.getElementById('expense-list-container');
             let expenses = getLocalStorage(expensesKey, []);
 
             if (!container) return;
 
-            if (expenses.length === 0) {
-                container.innerHTML = '<p class="text-center text-gray-500 p-4">目前沒有記帳紀錄。</p>';
-                return;
+            // 取得 4 天區塊（依行程表的 Day1~Day4 日期）
+            const tripDays = Array.isArray(tripData?.itinerary) ? tripData.itinerary : [];
+            const dayBlocks = tripDays.map(d => {
+                const label = String(d?.date || '').trim() || '未命名';
+                const m = label.match(/(\d+)\s*\/\s*(\d+)/);
+                const md = m ? `${parseInt(m[1], 10)}/${parseInt(m[2], 10)}` : null;
+                return { label, md };
+            }).filter(x => !!x.md);
+
+            // 基本工具：安全取時間
+            const getSpentAt = (exp) => exp?.spentAt || exp?.timestamp || exp?.createdAt || null;
+            const toDate = (x) => {
+                const d = x ? new Date(x) : new Date(NaN);
+                return isNaN(d.getTime()) ? null : d;
+            };
+            const getMD = (d) => d ? `${d.getMonth() + 1}/${d.getDate()}` : null;
+
+            // 排序：依消費時間（舊資料 fallback 到 timestamp）
+            const sorted = expenses.slice().sort((a, b) => {
+                const da = toDate(getSpentAt(a)) || new Date(0);
+                const db = toDate(getSpentAt(b)) || new Date(0);
+                return da - db;
+            });
+
+            // 分攤邏輯：全體 = 4 人均分；否則只在選到的人之間均分
+            const PEOPLE = ['欣', '珈', '芷', '湘'];
+            function normalizeConsumers(raw) {
+                const arr = Array.isArray(raw) ? raw : [];
+                if (arr.includes('全體')) return PEOPLE.slice();
+                return PEOPLE.filter(p => arr.includes(p));
+            }
+            function splitMap(exp) {
+                const amount = Number(exp?.krw || 0);
+                const cons = normalizeConsumers(exp?.consumers);
+                const n = cons.length;
+                if (!Number.isFinite(amount) || amount <= 0 || n <= 0) return {};
+                const each = amount / n;
+                const map = {};
+                cons.forEach(p => map[p] = (map[p] || 0) + each);
+                return map;
             }
 
-            const totalVND = expenses.reduce((sum, exp) => sum + Number(exp.krw || 0), 0);
+            // 旅遊總計
+            const totalVND = sorted.reduce((sum, exp) => sum + Number(exp.krw || 0), 0);
 
-            let listHtml = `
-                <div class="muji-card p-4 mb-4 text-center" style="background-color: var(--color-highlight); border-color: var(--color-accent);">
-                    <p class="text-lg font-bold" style="color: var(--color-text-main);">總計花費</p>
-                    <p class="text-2xl font-bold my-1" style="color: var(--color-text-main);">${Number(totalVND).toLocaleString()} VND(đ)</p>
-                    <p class="text-md text-gray-500">約 ${TWD_SYMBOL} ${formatTwd(totalVND, 3)} TWD</p>
+            // 個人總計（依分攤）
+            const personTotals = { '欣': 0, '珈': 0, '芷': 0, '湘': 0 };
+            sorted.forEach(exp => {
+                const sm = splitMap(exp);
+                PEOPLE.forEach(p => { personTotals[p] += Number(sm[p] || 0); });
+            });
+
+            // 依天分組（固定 4 區塊；若有不在 4 天內的資料，放到「其他」）
+            const groups = {};
+            dayBlocks.forEach(b => { groups[b.md] = []; });
+
+            const others = [];
+            sorted.forEach(exp => {
+                const d = toDate(getSpentAt(exp));
+                const md = getMD(d);
+                if (md && groups.hasOwnProperty(md)) groups[md].push(exp);
+                else others.push(exp);
+            });
+
+            const hasAny = sorted.length > 0;
+
+            // 建立「旅遊總計」卡片 + 個人分攤
+            let html = `
+                ${hasAny ? `
+                <div class="muji-card p-4 mb-4" style="background-color: #d7e4f7; border-color: var(--color-accent);">
+                    <p class="text-lg font-bold text-center" style="color: var(--color-text-main);">旅遊總計</p>
+                    <p class="text-2xl font-bold text-center my-1" style="color: var(--color-text-main);">${Number(totalVND).toLocaleString()} VND(đ)</p>
+                    <p class="text-md text-gray-600 text-center">約 ${TWD_SYMBOL} ${formatTwd(totalVND, 3)} TWD</p>
+
+                    <div class="mt-4 grid grid-cols-2 gap-2">
+                        ${PEOPLE.map(p => `
+                            <div class="p-3 rounded-lg border bg-white" style="border-color: var(--color-divider);">
+                                <div class="text-sm font-semibold" style="color: var(--color-text-main);">${p} 的總計</div>
+                                <div class="text-base font-bold" style="color: var(--color-text-main);">${Math.round(personTotals[p]).toLocaleString()} VND(đ)</div>
+                                <div class="text-xs text-gray-500">${TWD_SYMBOL} ${formatTwd(personTotals[p], 3)}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <p class="text-xs text-gray-600 mt-3">※ 分攤規則：選「全體」→ 4 人均分；只勾選部分人 → 只在勾選的人之間均分。</p>
                 </div>
+                ` : `
+                <p class="text-center text-gray-500 p-4">目前沒有記帳紀錄。</p>
+                `}
+            `;
 
-                <div class="space-y-3">
-                    ${expenses.slice().reverse().map(exp => {
-                        const catInfo = getCategoryInfo(exp.category);
-                        const consumers = Array.isArray(exp.consumers) ? exp.consumers : [];
-                        const payers = Array.isArray(exp.payers) ? exp.payers : [];
+            // 每日區塊渲染
+            function renderExpenseRow(exp) {
+                const catInfo = getCategoryInfo(exp.category);
 
-                        const whoLine = (consumers.length || payers.length)
-                            ? `<p class="text-xs text-gray-500 mt-0.5">消費：${consumers.length ? consumers.join('、') : '-'} ｜ 結帳：${payers.length ? payers.join('、') : '-'}</p>`
-                            : '';
+                const consumers = Array.isArray(exp.consumers) ? exp.consumers : [];
+                const payers = Array.isArray(exp.payers) ? exp.payers : [];
+                const note = (exp && typeof exp.note === 'string') ? exp.note.trim() : '';
 
-                        return `
-                        <div class="muji-card p-3 flex items-center justify-between border" style="border-color: var(--color-divider);">
-                            <div class="flex items-center space-x-3 flex-1 min-w-0">
-                                ${exp.photo ? 
-                                    `<img src="${exp.photo}" alt="收據縮圖" class="w-12 h-12 object-cover rounded-md border" style="border-color: var(--color-divider);">` 
-                                    : 
+                const escHtml = (s) => String(s ?? '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+
+                const whoLine = (consumers.length || payers.length)
+                    ? `<p class="text-xs text-gray-500 mt-0.5">消費：${consumers.length ? consumers.map(escHtml).join('、') : '-'} ｜ 結帳：${payers.length ? payers.map(escHtml).join('、') : '-'}</p>`
+                    : '';
+
+                const noteLine = note
+                    ? `<p class="text-xs text-gray-500 mt-0.5 truncate">備註：${escHtml(note)}</p>`
+                    : '';
+
+                const d = toDate(getSpentAt(exp));
+                const timeLabel = d
+                    ? `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                    : '-';
+
+                // datetime-local value: YYYY-MM-DDTHH:MM
+                const toInputDT = (dateObj) => {
+                    if (!dateObj) return '';
+                    const pad = (n) => String(n).padStart(2, '0');
+                    return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}T${pad(dateObj.getHours())}:${pad(dateObj.getMinutes())}`;
+                };
+                const editTimeValue = exp?.spentAt ? String(exp.spentAt) : toInputDT(d);
+
+                const consumerIsAll = consumers.includes('全體');
+
+                return `
+                    <div class="muji-card p-3 border" style="border-color: var(--color-divider);">
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="flex items-start space-x-3 flex-1 min-w-0">
+                                ${exp.photo ?
+                                    `<img src="${exp.photo}" alt="收據縮圖" class="w-12 h-12 object-cover rounded-md border" style="border-color: var(--color-divider);">`
+                                    :
                                     `<div class="w-12 h-12 flex items-center justify-center rounded-md text-white text-xl shadow-md" style="background-color: var(--color-text-main);">
                                         <i class="fas ${catInfo.icon}"></i>
                                     </div>`
                                 }
                                 <div class="truncate flex-1 min-w-0">
-                                    <p class="font-medium truncate" style="color: var(--color-text-main);">${exp.item}</p>
-                                    <p class="text-xs text-gray-500">${catInfo.name} - ${new Date(exp.timestamp).toLocaleDateString()} ${new Date(exp.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                                    <p class="font-medium truncate" style="color: var(--color-text-main);">${escHtml(exp.item)}</p>
+                                    <p class="text-xs text-gray-500">${escHtml(catInfo.name)} - ${escHtml(timeLabel)}</p>
                                     ${whoLine}
+                                    ${noteLine}
                                 </div>
                             </div>
 
-                            <div class="text-right flex flex-col items-end justify-between space-y-1 ml-4">
+                            <div class="text-right flex flex-col items-end justify-between space-y-1 ml-2 shrink-0">
                                 <p class="text-sm font-semibold whitespace-nowrap" style="color: var(--color-text-main);">${Number(exp.krw || 0).toLocaleString()} VND(đ)</p>
                                 <p class="text-xs text-gray-500 whitespace-nowrap">${TWD_SYMBOL} ${formatTwd(exp.krw || 0, 3)}</p>
-                                <button onclick="deleteExpense(${exp.id})" class="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded transition duration-150 whitespace-nowrap">
-                                    <i class="fas fa-trash-alt mr-1"></i> 刪除
-                                </button>
+
+                                <div class="flex items-center gap-2">
+                                    <button onclick="toggleExpenseEdit(${exp.id})" class="text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 p-1 rounded transition duration-150 whitespace-nowrap">
+                                        <i class="fas fa-pen mr-1"></i> 編輯
+                                    </button>
+                                    <button onclick="deleteExpense(${exp.id})" class="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded transition duration-150 whitespace-nowrap">
+                                        <i class="fas fa-trash-alt mr-1"></i> 刪除
+                                    </button>
+                                </div>
                             </div>
                         </div>
-                    `;
-                    }).join('')}
-                </div>
-            `;
-            container.innerHTML = listHtml;
+
+                        <!-- 編輯區（預設隱藏） -->
+                        <div id="edit-panel-${exp.id}" class="hidden mt-3 pt-3 border-t" style="border-color: var(--color-divider);">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">消費時間</label>
+                                    <input type="datetime-local" id="edit-time-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);" value="${escHtml(editTimeValue)}">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">分類</label>
+                                    <select id="edit-category-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);">
+                                        ${EXPENSE_CATEGORIES.map(cat => `<option value="${cat.key}" ${cat.key === exp.category ? 'selected' : ''}>${cat.name}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">品項</label>
+                                    <input type="text" id="edit-item-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);" value="${escHtml(exp.item || '')}">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">金額（VND）</label>
+                                    <input type="number" id="edit-amount-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);" value="${Number(exp.krw || 0)}">
+                                </div>
+                                <div class="md:col-span-2">
+                                    <label class="block text-xs text-gray-600 mb-1">備註</label>
+                                    <input type="text" id="edit-note-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);" value="${escHtml(note)}" placeholder="備註（可自由填寫）">
+                                </div>
+                            </div>
+
+                            <div class="mt-3">
+                                <p class="text-sm font-medium mb-1" style="color: var(--color-text-main);">誰消費（可複選）</p>
+                                <div class="flex flex-wrap gap-2">
+                                    <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
+                                        <input type="checkbox" class="edit-consumer-${exp.id} h-4 w-4" value="全體" ${consumerIsAll ? 'checked' : ''}>
+                                        <span>全體</span>
+                                    </label>
+                                    ${PEOPLE.map(p => `
+                                        <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
+                                            <input type="checkbox" class="edit-consumer-${exp.id} h-4 w-4" value="${p}" ${(!consumerIsAll && consumers.includes(p)) ? 'checked' : ''}>
+                                            <span>${p}</span>
+                                        </label>
+                                    `).join('')}
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">※ 若勾選「全體」，儲存時會以 4 人均分計算（其餘勾選會被忽略）。</p>
+                            </div>
+
+                            <div class="mt-3">
+                                <p class="text-sm font-medium mb-1" style="color: var(--color-text-main);">誰結帳（可複選）</p>
+                                <div class="flex flex-wrap gap-2">
+                                    ${PEOPLE.map(p => `
+                                        <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
+                                            <input type="checkbox" class="edit-payer-${exp.id} h-4 w-4" value="${p}" ${payers.includes(p) ? 'checked' : ''}>
+                                            <span>${p}</span>
+                                        </label>
+                                    `).join('')}
+                                </div>
+                            </div>
+
+                            <div class="mt-4 flex gap-2">
+                                <button onclick="saveExpenseEdit(${exp.id})" class="muji-btn flex-1" style="height: 42px;">儲存</button>
+                                <button onclick="cancelExpenseEdit(${exp.id})" class="muji-btn flex-1" style="height: 42px; background-color: #E9E1DA;">取消</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            const daySection = (label, md, items) => {
+                const dayTotal = items.reduce((sum, exp) => sum + Number(exp.krw || 0), 0);
+
+                // 當日分攤（規則同旅遊總計，但只計算當天）
+                const dayPersonTotals = { '欣': 0, '珈': 0, '芷': 0, '湘': 0 };
+                items.forEach(exp => {
+                    const sm = splitMap(exp);
+                    PEOPLE.forEach(p => { dayPersonTotals[p] += Number(sm[p] || 0); });
+                });
+
+                const header = `
+                    <div class="muji-card p-4 mb-3" style="border-color: var(--color-divider); background-color: var(--color-bg-primary);">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="text-base font-bold" style="color: var(--color-text-main);">${label}</div>
+                            <div class="text-right">
+                                <div class="text-sm font-semibold" style="color: var(--color-text-main);">當天總計：${Math.round(dayTotal).toLocaleString()} VND(đ)</div>
+                                <div class="text-xs text-gray-500">${TWD_SYMBOL} ${formatTwd(dayTotal, 3)}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                const splitCard = items.length ? `
+                    <div class="muji-card p-4 mb-3" style="background-color: #d7e4f7; border-color: var(--color-divider);">
+                        <div class="flex items-center justify-between">
+                            <div class="text-sm font-bold" style="color: var(--color-text-main);">當日總計</div>
+                            <div class="text-xs text-gray-600">（依分攤）</div>
+                        </div>
+                        <div class="mt-3 grid grid-cols-2 gap-2">
+                            ${PEOPLE.map(p => `
+                                <div class="p-3 rounded-lg border bg-white" style="border-color: var(--color-divider);">
+                                    <div class="text-sm font-semibold" style="color: var(--color-text-main);">${p}</div>
+                                    <div class="text-base font-bold" style="color: var(--color-text-main);">${Math.round(dayPersonTotals[p]).toLocaleString()} VND(đ)</div>
+                                    <div class="text-xs text-gray-500">${TWD_SYMBOL} ${formatTwd(dayPersonTotals[p], 3)}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                ` : '';
+
+                const body = items.length
+                    ? `<div class="space-y-3 mb-6">${items.map(renderExpenseRow).join('')}</div>`
+                    : `<p class="text-center text-gray-400 text-sm mb-6">（這一天尚無記帳紀錄）</p>`;
+                return header + splitCard + body;
+            };
+
+            // 依 4 天固定順序輸出
+            dayBlocks.forEach(b => {
+                html += daySection(b.label, b.md, groups[b.md] || []);
+            });
+
+            // 若有非 4 天資料，補一個「其他」
+            if (others.length) {
+                html += daySection('其他', null, others);
+            }
+
+            container.innerHTML = html;
         }
+
 
         // NEW: 刪除單筆開銷記錄
 
@@ -1517,9 +1771,87 @@ case 'WALLET':
             renderExpenseList();
         }
 
+        // NEW: 單筆開銷 - 編輯功能（預設隱藏編輯欄，儲存後回到顯示模式）
+        function toggleExpenseEdit(expenseId) {
+            const panel = document.getElementById(`edit-panel-${expenseId}`);
+            if (!panel) return;
+            panel.classList.toggle('hidden');
+        }
+
+        function cancelExpenseEdit(expenseId) {
+            const panel = document.getElementById(`edit-panel-${expenseId}`);
+            if (!panel) return;
+            panel.classList.add('hidden');
+        }
+
+        function saveExpenseEdit(expenseId) {
+            const PEOPLE = ['欣', '珈', '芷', '湘'];
+
+            const itemEl = document.getElementById(`edit-item-${expenseId}`);
+            const amountEl = document.getElementById(`edit-amount-${expenseId}`);
+            const categoryEl = document.getElementById(`edit-category-${expenseId}`);
+            const timeEl = document.getElementById(`edit-time-${expenseId}`);
+            const noteEl = document.getElementById(`edit-note-${expenseId}`);
+
+            const item = itemEl ? String(itemEl.value || '').trim() : '';
+            const amount = amountEl ? parseInt(amountEl.value, 10) : NaN;
+            const category = categoryEl ? String(categoryEl.value || '').trim() : '';
+            const spentAt = timeEl ? String(timeEl.value || '').trim() : '';
+            const note = noteEl ? String(noteEl.value || '').trim() : '';
+
+            const consumerChecked = Array.from(document.querySelectorAll(`.edit-consumer-${expenseId}:checked`)).map(el => el.value);
+            const payerChecked = Array.from(document.querySelectorAll(`.edit-payer-${expenseId}:checked`)).map(el => el.value);
+
+            if (!item || !Number.isFinite(amount) || amount <= 0) {
+                alertModal("請輸入有效的品項名稱和越南盾金額。");
+                return;
+            }
+
+            if (!consumerChecked.length) {
+                alertModal("請至少勾選一位「誰消費」。若為大家一起吃，請勾選「全體」。");
+                return;
+            }
+
+            // 儲存格式：若含「全體」則只存 ['全體']，否則只存 4 人名
+            const consumers = consumerChecked.includes('全體') ? ['全體'] : PEOPLE.filter(p => consumerChecked.includes(p));
+            const payers = PEOPLE.filter(p => payerChecked.includes(p));
+
+            // 讀取並更新
+            let expenses = getLocalStorage(expensesKey, []);
+            const idx = expenses.findIndex(e => Number(e.id) === Number(expenseId));
+            if (idx < 0) return;
+
+            // 若使用者清空時間，則保留原時間；若原本也沒有，就用現在
+            let finalSpentAt = spentAt;
+            if (!finalSpentAt) {
+                finalSpentAt = expenses[idx]?.spentAt || '';
+            }
+            if (!finalSpentAt) {
+                const now = new Date();
+                const pad = (n) => String(n).padStart(2, '0');
+                finalSpentAt = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+            }
+
+            expenses[idx] = {
+                ...expenses[idx],
+                item,
+                krw: amount,
+                category: category || expenses[idx].category,
+                spentAt: finalSpentAt,
+                note: note,
+                consumers,
+                payers
+            };
+
+            setLocalStorage(expensesKey, expenses);
+            renderExpenseList();
+            alertModal('已儲存修改。');
+        }
+
+
 
         // 設置 Wallet Tab 的事件監聽器 (已加入儲存成功提示)
-        function setupWalletListeners() {
+        function setupConvertListeners() {
             // --- 匯率設定 ---
             document.getElementById('set-rate-btn').addEventListener('click', () => {
                 const input = document.getElementById('rate-input');
@@ -1619,10 +1951,22 @@ case 'WALLET':
                     }
                 });
             });
+        }
 
-            // --- 記帳功能 ---
+
+        function setupWalletListeners() {// --- 記帳功能 ---
             const photoInput = document.getElementById('expense-photo');
             let base64Photo = null;
+            const expenseTimeInput = document.getElementById('expense-time');
+            const setExpenseTimeNow = () => {
+                if (!expenseTimeInput) return;
+                const now = new Date();
+                const pad = (n) => String(n).padStart(2, '0');
+                expenseTimeInput.value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+            };
+            // 預設帶入現在時間，使用者可自行調整
+            setExpenseTimeNow();
+
 
             photoInput.addEventListener('change', (e) => {
                 const file = e.target.files[0];
@@ -1635,16 +1979,21 @@ case 'WALLET':
                 }
             });
 
+            
             document.getElementById('add-expense-btn').addEventListener('click', () => {
                 const itemInput = document.getElementById('expense-item');
                 const amountInput = document.getElementById('expense-krw');
                 const categoryInput = document.getElementById('expense-category');
+                const timeInput = document.getElementById('expense-time');
+                const noteInput = document.getElementById('expense-note');
 
                 const item = itemInput.value.trim();
                 const amount = parseInt(amountInput.value, 10);
                 const category = categoryInput.value;
 
-                const consumers = Array.from(document.querySelectorAll('.consume-checkbox:checked')).map(el => el.value);
+                const note = noteInput ? String(noteInput.value || '').trim() : '';
+
+                const consumersRaw = Array.from(document.querySelectorAll('.consume-checkbox:checked')).map(el => el.value);
                 const payers = Array.from(document.querySelectorAll('.payer-checkbox:checked')).map(el => el.value);
 
                 if (!item || isNaN(amount) || amount <= 0) {
@@ -1652,16 +2001,33 @@ case 'WALLET':
                     return;
                 }
 
+                if (!consumersRaw.length) {
+                    alertModal("請至少勾選一位「誰消費」。若為大家一起吃，請勾選「全體」。");
+                    return;
+                }
+
+                // 消費時間（使用者可自行調整）：優先用輸入值，否則用現在
+                let spentAt = (timeInput && timeInput.value) ? String(timeInput.value) : '';
+                if (!spentAt) {
+                    // 生成 datetime-local 需要的格式：YYYY-MM-DDTHH:MM（本地時間）
+                    const now = new Date();
+                    const pad = (n) => String(n).padStart(2, '0');
+                    spentAt = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+                }
+
                 const newExpense = {
                     id: Date.now(),
                     item: item,
                     krw: amount, // 保留原欄位名以兼容舊資料（此處代表 VND）
                     category: category,
-                    consumers: consumers,
+                    consumers: consumersRaw,
                     payers: payers,
                     photo: base64Photo,
-                    timestamp: new Date().toISOString()
-                };
+                    // created time (for debugging/legacy), and spentAt for sorting/grouping
+                    timestamp: new Date().toISOString(),
+                    spentAt: spentAt
+                                    ,note: note
+};
 
                 let expenses = getLocalStorage(expensesKey, []);
                 expenses.push(newExpense);
@@ -1670,10 +2036,18 @@ case 'WALLET':
                 // 清空表單
                 itemInput.value = '';
                 amountInput.value = '';
+                if (noteInput) noteInput.value = '';
                 categoryInput.value = EXPENSE_CATEGORIES[0].key;
                 photoInput.value = null;
                 document.getElementById('photo-preview').innerHTML = '（圖片壓縮後不會佔用太多容量，有照片時不會顯示分類圖示）';
                 base64Photo = null;
+
+                // reset time to now
+                if (timeInput) {
+                    const now = new Date();
+                    const pad = (n) => String(n).padStart(2, '0');
+                    timeInput.value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+                }
 
                 document.querySelectorAll('.consume-checkbox').forEach(el => el.checked = false);
                 document.querySelectorAll('.payer-checkbox').forEach(el => el.checked = false);
@@ -1682,6 +2056,7 @@ case 'WALLET':
                 alertModal('開銷項目已成功紀錄！');
             });
         }
+
 
 
         // --- Tab: LISTS (清單) 渲染 (已重構) ---
