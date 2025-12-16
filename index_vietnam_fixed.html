@@ -494,6 +494,33 @@ let cloudPushTimer = null;
 let cloudPollTimer = null;
 let cloudLastPushedHash = "";
 let cloudLastRemoteUpdatedAt = null;
+
+function _cloudGetStatus(err) {
+  try {
+    if (!err) return null;
+    if (typeof err.status === "number") return err.status;
+    if (typeof err.statusCode === "number") return err.statusCode;
+    if (typeof err.code === "number") return err.code;
+    // supabase-js / postgrest 常見：{ code: 'PGRST...' , message: '...', details: '...' }
+    const msg = String(err.message || "");
+    const m = msg.match(/status\s*\(?\s*(\d{3})\s*\)?/i);
+    if (m) return Number(m[1]);
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function _cloudDisableAutoSync(reason) {
+  try {
+    cloudAutoSync = false;
+    clearInterval(cloudPollTimer);
+    cloudPollTimer = null;
+    console.warn("[CloudSync] auto-sync disabled:", reason || "");
+  } catch (e) {}
+}
+
+
 let cloudApplyingRemoteSnapshot = false;
 
 function initSupabaseClient() {
@@ -537,6 +564,10 @@ async function ensureSharedDocExists() {
       .from("shared_docs")
       .upsert({ id: SHARED_DOC_ID, data: empty, updated_at: now }, { onConflict: "id" });
   } catch (e) {
+    const st = _cloudGetStatus(e);
+    if (st === 401) {
+      _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
+    }
     console.error("[CloudSync] ensure doc failed:", e);
   }
 }
@@ -562,11 +593,16 @@ async function pushToCloud() {
       .from("shared_docs")
       .upsert({ id: SHARED_DOC_ID, data: snapshot, updated_at: now }, { onConflict: "id" })
       .select("updated_at")
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
     cloudLastRemoteUpdatedAt = data?.updated_at || now;
   } catch (e) {
+    // 若 RLS/授權未開，避免一直刷錯誤：自動停用同步
+    const st = _cloudGetStatus(e);
+    if (st === 401) {
+      _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
+    }
     console.error("[CloudSync] push failed:", e);
   }
 }
@@ -578,7 +614,7 @@ async function pullFromCloud(force = false) {
       .from("shared_docs")
       .select("data, updated_at")
       .eq("id", SHARED_DOC_ID)
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
     if (!data) return;
@@ -595,6 +631,14 @@ async function pullFromCloud(force = false) {
       applyRemoteSnapshot(data.data);
     }
   } catch (e) {
+    // 0 rows / 尚未建立雲端資料：不用當成錯誤
+    if (e && (e.code === "PGRST116" || String(e.message || "").includes("Cannot coerce the result"))) {
+      return;
+    }
+    const st = _cloudGetStatus(e);
+    if (st === 401) {
+      _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
+    }
     console.error("[CloudSync] pull failed:", e);
   }
 }
