@@ -378,6 +378,7 @@
         const rateRecordNoteKey = `${APP_ID}_RATE_RECORD_NOTE`; // NEW: 匯率紀錄備註
         const localInfoLinksKey = `${APP_ID}_LOCAL_INFO_LINKS`; // NEW: 資訊頁當地資訊連結
         const expensesKey = `${APP_ID}_EXPENSES`;
+        const settlementStateKey = `${APP_ID}_SETTLEMENT_STATE`; // NEW: 結清狀態（每日結清勾選/旅遊總結清）
         const checklistKey = `${APP_ID}_CHECKLIST`;
         const memoKey = `${APP_ID}_MEMO`;
         const memoInfoKey = `${APP_ID}_MEMO_INFO`; // NEW: 資訊頁備註
@@ -479,6 +480,78 @@ guide_spots:
         }
         
         
+
+
+// ===============================
+// Settlement state (Daily/Trip)
+// ===============================
+function _getSettlementState() {
+  const defVal = { days: {}, trip: {} };
+  const s = getLocalStorage(settlementStateKey, defVal);
+  if (!s || typeof s !== 'object') return { ...defVal };
+  if (!s.days || typeof s.days !== 'object') s.days = {};
+  if (!s.trip || typeof s.trip !== 'object') s.trip = {};
+  return s;
+}
+
+function _setSettlementState(s) {
+  setLocalStorage(settlementStateKey, s);
+}
+
+function getDayPaidMap(dayKey) {
+  const key = String(dayKey || '其他');
+  const s = _getSettlementState();
+  const day = (s.days && s.days[key]) ? s.days[key] : {};
+  const lines = (day.lines && typeof day.lines === 'object') ? day.lines : {};
+  return { lines };
+}
+
+function _setDayPaidLines(dayKey, linesObj) {
+  const key = String(dayKey || '其他');
+  const s = _getSettlementState();
+  if (!s.days) s.days = {};
+  s.days[key] = {
+    ...(s.days[key] || {}),
+    lines: (linesObj && typeof linesObj === 'object') ? linesObj : {},
+    updatedAt: new Date().toISOString()
+  };
+  _setSettlementState(s);
+}
+
+function clearDaySettlement(dayKey) {
+  _setDayPaidLines(dayKey, {});
+}
+
+// Toggle a settlement line (from -> to) for a specific day.
+// When checked, mark paid amount = total (int VND). When unchecked, remove it.
+function toggleSettleLine(dayKey, from, to, total) {
+  const dKey = String(dayKey || '其他');
+  const k = `${from}->${to}`;
+  const t = Math.max(0, Math.trunc(Number(total || 0)));
+
+  const curState = getDayPaidMap(dKey);
+  const lines = (curState && curState.lines) ? curState.lines : {};
+  const cur = Math.max(0, Math.trunc(Number(lines[k] || 0)));
+  const isOn = (t > 0) && (cur >= t);
+
+  if (isOn) {
+    if (!confirm('取消這筆結清會影響結清結果，確定要改回未結清嗎？')) return;
+    const nl = { ...lines };
+    delete nl[k];
+    _setDayPaidLines(dKey, nl);
+  } else {
+    if (t <= 0) return;
+    const nl = { ...lines, [k]: t };
+    _setDayPaidLines(dKey, nl);
+  }
+
+  try { if (typeof renderExpenseList === 'function') renderExpenseList(); } catch (e) {}
+}
+
+window.getDayPaidMap = getDayPaidMap;
+window.toggleSettleLine = toggleSettleLine;
+window.clearDaySettlement = clearDaySettlement;
+
 // ===============================
 // Cloud Sync (Supabase)
 // ===============================
@@ -490,7 +563,7 @@ const ENABLE_CLOUD_SYNC = SUPABASE_ANON_KEY !== "PASTE_YOUR_SUPABASE_ANON_KEY_HE
 const SHARED_DOC_ID = "vietnam-trip-2026";
 
 // 3) 要同步的 localStorage keys
-const SYNC_KEYS = [exchangeRateKey, daesagwanRateKey, expensesKey, checklistKey, memoKey, memoInfoKey, tripDataKey, APP_TITLE_KEY, rateRecordNoteKey, localInfoLinksKey];
+const SYNC_KEYS = [exchangeRateKey, daesagwanRateKey, expensesKey, checklistKey, memoKey, memoInfoKey, tripDataKey, APP_TITLE_KEY, rateRecordNoteKey, localInfoLinksKey, settlementStateKey];
 
 let supabaseClient = null;
 let cloudAutoSync = true;
@@ -1449,6 +1522,17 @@ case 'WALLET':
                 }).join('')}
             `;
             container.innerHTML = html;
+
+            // 旅遊總結清：規則說明收合
+            const tripRulesBtn = document.getElementById('toggle-trip-settle-rules');
+            const tripRulesBox = document.getElementById('trip-settle-rules');
+            if (tripRulesBtn && tripRulesBox) {
+                tripRulesBtn.addEventListener('click', () => {
+                    const hidden = tripRulesBox.classList.toggle('hidden');
+                    tripRulesBtn.textContent = hidden ? '查看結算規則' : '隱藏結算規則';
+                });
+            }
+
         }
         // --- (深度導覽) 渲染 (不變) ---
         function renderGuideTab(container) {
@@ -1531,6 +1615,7 @@ case 'WALLET':
 
                     <div class="mt-3">
                         <p class="text-sm font-medium mb-1" style="color: var(--color-text-main);">誰結帳（可複選）</p>
+                        <p class="text-xs text-gray-600 mb-2">多人付款說明：若勾選多位付款人，系統會將「付款金額」在付款人之間<strong>均分付款</strong>（整數均分；餘數以輪流方式平均分攤）。</p>
                         <div class="flex flex-wrap gap-2">
                             ${PAYERS_MULTI.map(p => `
                                 <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
@@ -1551,6 +1636,15 @@ case 'WALLET':
                 <h3 class="text-xl font-bold mb-3" style="color: var(--color-text-main);">📜 記帳歷史</h3>
                 <div id="expense-list-container">
                     ${expenses.length === 0 ? '<p class="text-center text-gray-500 p-4">目前沒有記帳紀錄。</p>' : ''}
+                </div>
+
+                <div class="muji-card p-4 mt-6">
+                    <h3 class="text-lg font-semibold mb-2" style="color: var(--color-text-main);">📤 匯出總報表（CSV / PDF）</h3>
+                    <p class="text-xs text-gray-500 mb-3">會匯出整個記帳資料（包含時間、品項、分類、金額、誰消費、誰結帳、備註、結清狀態）。PDF 會以「列印/另存 PDF」方式輸出。</p>
+                    <div class="flex gap-2">
+                        <button id="export-csv-btn" class="muji-btn flex-1 text-sm"><i class="fas fa-file-csv mr-2"></i>匯出 CSV</button>
+                        <button id="export-pdf-btn" class="muji-btn-light flex-1 text-sm" style="border-color: var(--color-divider);"><i class="fas fa-file-pdf mr-2"></i>匯出 PDF</button>
+                    </div>
                 </div>`;
             container.innerHTML = html;
             setupWalletListeners();
@@ -1684,23 +1778,267 @@ function renderConvertTab(container) {
                 return da - db;
             });
 
-            // 分攤邏輯：全體 = 4 人均分；否則只在選到的人之間均分
-            const PEOPLE = ['欣', '珈', '芷', '湘'];
-            function normalizeConsumers(raw) {
-                const arr = Array.isArray(raw) ? raw : [];
-                if (arr.includes('全體')) return PEOPLE.slice();
-                return PEOPLE.filter(p => arr.includes(p));
+            // 分攤邏輯（整數四捨五入 + 誤差平均分攤）：
+// - 誰消費含「全體」→ 4 人均分
+// - 否則只在勾選的人之間均分
+// - 以整數 VND(đ) 分配，確保每筆加總=原金額，且餘數用輪轉方式平均分攤
+const PEOPLE = ['欣', '珈', '芷', '湘'];
+
+function normalizeConsumers(raw) {
+    const arr = Array.isArray(raw) ? raw : [];
+    if (arr.includes('全體')) return PEOPLE.slice();
+    return PEOPLE.filter(p => arr.includes(p));
+}
+function normalizePayers(raw) {
+    const arr = Array.isArray(raw) ? raw : [];
+    if (arr.includes('各自')) return ['各自'];
+    const pp = PEOPLE.filter(p => arr.includes(p));
+    return pp;
+}
+function isManualSettled(exp) {
+    // 兼容舊資料：isSettled=true 但沒有 settledBy → 視為手動
+    if (!exp) return false;
+    if (!exp.isSettled) return false;
+    const by = exp.settledBy ? String(exp.settledBy) : '';
+    return (by === '' || by === 'manual');
+}
+
+
+// ===== 結清/分攤用工具（整數安全 + 誤差平均分攤）=====
+function _safeInt(v, fallback = 0) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback;
+    // 以「元」為單位的整數處理（去除小數）
+    return Math.trunc(n);
+}
+
+// 簡單字串雜湊（用於輪轉起點；確保同一筆 seed 结果固定）
+function _hashToIndex(str, mod) {
+    const s = String(str ?? '');
+    let h = 2166136261; // FNV-1a base
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    const x = (h >>> 0);
+    if (!mod || mod <= 0) return x;
+    return x % mod;
+}
+
+// 整數公平均分：總額 total 在 people 之間分配（每人皆為整數）
+// 1) 先每人 base = floor(total/n)
+// 2) 餘數 rem 以「輪流分配」加 1（起點由 seed 決定）→ 達到誤差平均分攤
+function splitIntegerFair(total, people, seed = '') {
+    const list = Array.isArray(people) ? people.filter(Boolean) : [];
+    const n = list.length;
+    const out = {};
+    if (!n) return out;
+
+    const t = Math.max(0, _safeInt(total, 0));
+    const base = Math.floor(t / n);
+    let rem = t - base * n;
+
+    list.forEach(p => { out[p] = base; });
+
+    if (rem <= 0) return out;
+
+    const start = _hashToIndex(seed, n);
+    for (let i = 0; i < rem; i++) {
+        const p = list[(start + i) % n];
+        out[p] = (out[p] || 0) + 1;
+    }
+    return out;
+}
+// 分攤到個人（用於「旅遊總計 / 當日總計」）
+function splitMap(exp) {
+    const amountInt = Math.max(0, _safeInt(exp?.krw || 0, 0));
+    const cons = normalizeConsumers(exp?.consumers);
+    if (!amountInt || !cons.length) return {};
+    const shares = splitIntegerFair(amountInt, cons, `cons|${exp?.id || ''}|${exp?.spentAt || ''}`);
+    const map = {};
+    cons.forEach(p => map[p] = (map[p] || 0) + (shares[p] || 0));
+    return map;
+}
+
+// 產生單筆開銷的「應付/應收」義務（支援多人付款）
+function buildExpenseObligations(exp) {
+    const obligations = []; // {expenseId, from, to, amount}
+    if (!exp) return { obligations, eligible: false };
+
+    if (isManualSettled(exp)) return { obligations, eligible: false };
+
+    const amountInt = Math.max(0, _safeInt(exp?.krw || 0, 0));
+    if (!amountInt) return { obligations, eligible: false };
+
+    const consumers = normalizeConsumers(exp?.consumers);
+    const payers = normalizePayers(exp?.payers);
+    if (!consumers.length) return { obligations, eligible: false };
+    if (!payers.length || payers.includes('各自')) return { obligations, eligible: false };
+
+    // 以同一 seed 做輪轉：讓餘數在不同筆之間平均分攤
+    const seedBase = `exp|${exp?.id || ''}|${exp?.spentAt || ''}`;
+
+    const consShares = splitIntegerFair(amountInt, consumers, `${seedBase}|cons`);
+    const payShares = splitIntegerFair(amountInt, payers, `${seedBase}|pay`);
+
+    // net = 付款份額 - 消費份額
+    const net = {};
+    PEOPLE.forEach(p => { net[p] = 0; });
+    consumers.forEach(p => { net[p] -= (consShares[p] || 0); });
+    payers.forEach(p => { net[p] += (payShares[p] || 0); });
+
+    const debtors = PEOPLE.filter(p => net[p] < 0).map(p => ({ p, v: -net[p] }));
+    const creditors = PEOPLE.filter(p => net[p] > 0).map(p => ({ p, v: net[p] }));
+
+    // 以 PEOPLE 順序做 deterministic matching
+    let i = 0, j = 0;
+    while (i < debtors.length && j < creditors.length) {
+        const d = debtors[i];
+        const c = creditors[j];
+        const m = Math.min(d.v, c.v);
+        if (m > 0 && d.p !== c.p) {
+            obligations.push({ expenseId: exp.id, from: d.p, to: c.p, amount: m });
+        }
+        d.v -= m;
+        c.v -= m;
+        if (d.v <= 0) i++;
+        if (c.v <= 0) j++;
+    }
+
+    return { obligations, eligible: true };
+}
+
+// 將多筆 obligations 彙總成「同一對象互相抵銷」後的淨額（並保留可映射到哪幾筆開銷）
+function computeNetPairsWithMapping(expensesInScope, scopeKeyForPaid = null) {
+    // 1) 收集原始方向清單
+    const dirLists = new Map(); // key "A->B" => [{expenseId, amount}]
+    const dirSums = new Map();
+
+    const eligibleExpenseIds = new Set();
+
+    (expensesInScope || []).forEach(exp => {
+        const { obligations, eligible } = buildExpenseObligations(exp);
+        if (eligible) eligibleExpenseIds.add(exp.id);
+        obligations.forEach(o => {
+            const k = `${o.from}->${o.to}`;
+            if (!dirLists.has(k)) dirLists.set(k, []);
+            dirLists.get(k).push({ expenseId: o.expenseId, amount: _safeInt(o.amount, 0) });
+            dirSums.set(k, (dirSums.get(k) || 0) + _safeInt(o.amount, 0));
+        });
+    });
+
+    // 2) 互相抵銷（僅同一對象 A<->B）
+    function consumeFromList(list, amt) {
+        let remaining = amt;
+        while (remaining > 0 && list.length) {
+            const cur = list[0];
+            const take = Math.min(cur.amount, remaining);
+            cur.amount -= take;
+            remaining -= take;
+            if (cur.amount <= 0) list.shift();
+        }
+        return amt - remaining;
+    }
+
+    // 對於每一對 (A,B) 做抵銷
+    for (let ai = 0; ai < PEOPLE.length; ai++) {
+        for (let bi = ai + 1; bi < PEOPLE.length; bi++) {
+            const A = PEOPLE[ai], B = PEOPLE[bi];
+            const kAB = `${A}->${B}`;
+            const kBA = `${B}->${A}`;
+            const sumAB = dirSums.get(kAB) || 0;
+            const sumBA = dirSums.get(kBA) || 0;
+            const cancel = Math.min(sumAB, sumBA);
+            if (cancel <= 0) continue;
+
+            const listAB = dirLists.get(kAB) || [];
+            const listBA = dirLists.get(kBA) || [];
+            const c1 = consumeFromList(listAB, cancel);
+            const c2 = consumeFromList(listBA, cancel);
+            // 理論上 c1==c2==cancel；若有落差，以較小者為準再回寫 sums
+            const c = Math.min(c1, c2);
+            dirSums.set(kAB, sumAB - c);
+            dirSums.set(kBA, sumBA - c);
+            dirLists.set(kAB, listAB);
+            dirLists.set(kBA, listBA);
+        }
+    }
+
+    // 3) 套用「已結清」勾選：只針對 scopeKeyForPaid（每天）來扣抵
+    //    paidMap: { "A->B": paidAmountInt }
+    let paidMap = {};
+    if (scopeKeyForPaid) {
+        const { lines } = getDayPaidMap(scopeKeyForPaid);
+        paidMap = lines || {};
+    }
+
+    const expenseRemaining = new Map(); // expenseId -> remaining amount after (抵銷 + 已結清扣抵)
+    eligibleExpenseIds.forEach(id => expenseRemaining.set(id, 0));
+
+    // 先加總每筆在抵銷後仍存在的義務
+    for (const [k, list] of dirLists.entries()) {
+        const sum = dirSums.get(k) || 0;
+        if (sum <= 0) continue;
+        list.forEach(seg => {
+            if (!seg || seg.amount <= 0) return;
+            if (!expenseRemaining.has(seg.expenseId)) expenseRemaining.set(seg.expenseId, 0);
+            expenseRemaining.set(seg.expenseId, expenseRemaining.get(seg.expenseId) + seg.amount);
+        });
+    }
+
+    // 再依方向順序套用「已結清」金額（FIFO 逐筆對應到最早的記帳）
+    function applyPaidToList(list, paid) {
+        let remaining = paid;
+        while (remaining > 0 && list.length) {
+            const seg = list[0];
+            const take = Math.min(seg.amount, remaining);
+            seg.amount -= take;
+            remaining -= take;
+
+            // 這筆 seg 所屬的 expenseId 被扣抵
+            if (expenseRemaining.has(seg.expenseId)) {
+                expenseRemaining.set(seg.expenseId, Math.max(0, expenseRemaining.get(seg.expenseId) - take));
             }
-            function splitMap(exp) {
-                const amount = Number(exp?.krw || 0);
-                const cons = normalizeConsumers(exp?.consumers);
-                const n = cons.length;
-                if (!Number.isFinite(amount) || amount <= 0 || n <= 0) return {};
-                const each = amount / n;
-                const map = {};
-                cons.forEach(p => map[p] = (map[p] || 0) + each);
-                return map;
-            }
+            if (seg.amount <= 0) list.shift();
+        }
+        return paid - remaining;
+    }
+
+    const netLines = [];
+    for (const [k, sum0] of dirSums.entries()) {
+        const sum = _safeInt(sum0, 0);
+        if (sum <= 0) continue;
+        const paid = Math.min(sum, Math.max(0, _safeInt(paidMap[k] || 0, 0)));
+        // 套用扣抵（只影響 auto-settled 判斷；不改原始 sum 計算）
+        const list = dirLists.get(k) || [];
+        // 複製一份 list 以免在 render 期間破壞後續計算（這裡採用 shallow copy）
+        const listCopy = list.map(x => ({...x}));
+        applyPaidToList(listCopy, paid);
+
+        const [from, to] = String(k).split('->');
+        netLines.push({
+            key: k, from, to,
+            total: sum,
+            paid,
+            remaining: Math.max(0, sum - paid)
+        });
+    }
+
+    // auto-settled：只有「有參與結清計算」的筆，且 remaining=0 才視為自動結清
+    const autoSettledIds = new Set();
+    for (const id of eligibleExpenseIds) {
+        const rem = expenseRemaining.get(id) || 0;
+        if (rem <= 0) autoSettledIds.add(id);
+    }
+
+    // 排序：先收款者，再付款者（保持穩定）
+    netLines.sort((a, b) =>
+        (PEOPLE.indexOf(a.to) - PEOPLE.indexOf(b.to)) ||
+        (PEOPLE.indexOf(a.from) - PEOPLE.indexOf(b.from))
+    );
+
+    return { netLines, autoSettledIds, eligibleExpenseIds };
+}
 
             // 旅遊總計
             const totalVND = sorted.reduce((sum, exp) => sum + Number(exp.krw || 0), 0);
@@ -1712,7 +2050,14 @@ function renderConvertTab(container) {
                 PEOPLE.forEach(p => { personTotals[p] += Number(sm[p] || 0); });
             });
 
-            // 依天分組（固定 4 區塊；若有不在 4 天內的資料，放到「其他」）
+            
+// 旅遊總結清（全旅程淨額）：同一對象互相抵銷後的淨額（不含「各自」與手動已結清）
+const tripSettleView = computeNetPairsWithMapping(sorted, null);
+const tripNetPairs = (tripSettleView.netLines || [])
+    .filter(x => Number(x.total || 0) > 0)
+    .map(x => ({ from: x.from, to: x.to, total: _safeInt(x.total, 0) }))
+    .sort((a, b) => (PEOPLE.indexOf(a.to) - PEOPLE.indexOf(b.to)) || (PEOPLE.indexOf(a.from) - PEOPLE.indexOf(b.from)));
+// 依天分組（固定 4 區塊；若有不在 4 天內的資料，放到「其他」）
             const groups = {};
             dayBlocks.forEach(b => { groups[b.md] = []; });
 
@@ -1725,6 +2070,17 @@ function renderConvertTab(container) {
             });
 
             const hasAny = sorted.length > 0;
+
+// 先計算每日結清（含「已結清」勾選）：用於顯示每日結清清單（不再自動回寫到下方明細結清狀態）
+const daySettleViews = {};
+dayBlocks.forEach(b => {
+    const dayKey = String(b.md);
+    daySettleViews[dayKey] = computeNetPairsWithMapping(groups[dayKey] || [], dayKey);
+});
+if (others.length) {
+    const dayKey = '其他';
+    daySettleViews[dayKey] = computeNetPairsWithMapping(others, dayKey);
+}
 
             // 建立「旅遊總計」卡片 + 個人分攤
             let html = `
@@ -1743,9 +2099,43 @@ function renderConvertTab(container) {
                             </div>
                         `).join('')}
                     </div>
-                    <p class="text-xs text-gray-600 mt-3">※ 分攤規則：選「全體」→ 4 人均分；只勾選部分人 → 只在勾選的人之間均分。</p>
+                    
+<p class="text-xs text-gray-600 mt-3">※ 分攤規則：選「全體」→ 4 人均分；只勾選部分人 → 只在勾選的人之間均分。</p>
+</div>
+
+<!-- 旅遊總結清（全旅程淨額） -->
+<div class="muji-card p-4 mb-4" style="background-color: #d7e4f7; border-color: var(--color-accent);">
+    <div class="flex items-center justify-between gap-3">
+        <p class="text-lg font-bold" style="color: var(--color-text-main);">旅遊總結清（全旅程淨額）</p>
+    </div>
+    <details class="mt-2 text-xs text-gray-700 leading-relaxed">
+        <summary class="cursor-pointer underline text-gray-600 select-none">查看結算規則</summary>
+        <div class="mt-2">
+            <ul class="list-disc pl-5 space-y-1">
+                <li>僅計入：未結清、且「誰結帳」不是「各自」的記帳。</li>
+                <li>每筆以整數均分：先取整數，再將餘數以「輪流方式」分配到不同人，讓誤差平均分攤。</li>
+                <li>若同一對象互相欠款：只抵銷相同金額；相減後若仍有剩餘，仍需給付剩餘額。</li>
+                <li>多人付款：同一筆「付款金額」在付款人之間<strong>須均分付款</strong>（整數均分；餘數輪流分配）。</li>
+            </ul>
+        </div>
+    </details>
+
+    <div class="mt-3 space-y-2">
+        ${tripNetPairs.length ? tripNetPairs.map(x => `
+            <div class="flex items-center justify-between gap-3 p-3 rounded-lg border bg-white" style="border-color: var(--color-divider);">
+                <div class="text-sm font-semibold" style="color: var(--color-text-main);">${x.from} → ${x.to}</div>
+                <div class="text-right">
+                    <div class="text-sm font-bold" style="color: var(--color-text-main);">${Number(x.total).toLocaleString()} VND(đ)</div>
+                    <div class="text-xs text-gray-500">${TWD_SYMBOL} ${formatTwd(x.total, 3)}</div>
                 </div>
-                ` : `
+            </div>
+        `).join('') : `
+            <p class="text-sm text-gray-500">目前無需轉帳（已抵銷或皆已結清）。</p>
+        `}
+    </div>
+</div>
+
+` : `
                 <p class="text-center text-gray-500 p-4">目前沒有記帳紀錄。</p>
                 `}
             `;
@@ -1788,6 +2178,8 @@ function renderConvertTab(container) {
 
                 const consumerIsAll = consumers.includes('全體');
 
+                const isSettled = !!exp.isSettled;
+
                 return `
                     <div class="muji-card p-3 border" style="border-color: var(--color-divider);">
                         <div class="flex items-start justify-between gap-3">
@@ -1810,6 +2202,15 @@ function renderConvertTab(container) {
                             <div class="text-right flex flex-col items-end justify-between space-y-1 ml-2 shrink-0">
                                 <p class="text-sm font-semibold whitespace-nowrap" style="color: var(--color-text-main);">${Number(exp.krw || 0).toLocaleString()} VND(đ)</p>
                                 <p class="text-xs text-gray-500 whitespace-nowrap">${TWD_SYMBOL} ${formatTwd(exp.krw || 0, 3)}</p>
+
+                                <button onclick="toggleExpenseSettled(${exp.id})" class="flex items-center gap-2 text-[11px] px-2 py-1 rounded-full border hover:shadow-sm transition duration-150"
+                                    style="border-color: var(--color-divider); background-color: ${isSettled ? '#d7e4f7' : 'white'};">
+                                    <span class="inline-flex items-center justify-center w-4 h-4 rounded-full border"
+                                        style="border-color: ${isSettled ? 'var(--color-accent)' : 'var(--color-divider)'}; background-color: ${isSettled ? 'var(--color-accent)' : 'transparent'};">
+                                        ${isSettled ? '<i class=&quot;fas fa-check text-[10px] text-white&quot;></i>' : ''}
+                                    </span>
+                                    <span class="whitespace-nowrap">${isSettled ? '已結清' : '未結清'}</span>
+                                </button>
 
                                 <div class="flex items-center gap-2">
                                     <button onclick="toggleExpenseEdit(${exp.id})" class="text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 p-1 rounded transition duration-150 whitespace-nowrap">
@@ -1869,7 +2270,7 @@ function renderConvertTab(container) {
                             <div class="mt-3">
                                 <p class="text-sm font-medium mb-1" style="color: var(--color-text-main);">誰結帳（可複選）</p>
                                 <div class="flex flex-wrap gap-2">
-                                    ${PEOPLE.map(p => `
+                                    ${[...PEOPLE, '各自'].map(p => `
                                         <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
                                             <input type="checkbox" class="edit-payer-${exp.id} h-4 w-4" value="${p}" ${payers.includes(p) ? 'checked' : ''}>
                                             <span>${p}</span>
@@ -1927,10 +2328,70 @@ function renderConvertTab(container) {
                     </div>
                 ` : '';
 
+                
+const dayKey = md ? String(md) : '其他';
+const settleView = daySettleViews[dayKey] || computeNetPairsWithMapping(items, dayKey);
+const settlePairs = (settleView.netLines || [])
+    .filter(x => Number(x.total || 0) > 0)
+    .map(x => ({
+        from: x.from,
+        to: x.to,
+        total: _safeInt(x.total, 0),
+        paid: _safeInt(x.paid, 0),
+        remaining: _safeInt(x.remaining, 0)
+    }))
+    .sort((a, b) => (PEOPLE.indexOf(a.to) - PEOPLE.indexOf(b.to)) || (PEOPLE.indexOf(a.from) - PEOPLE.indexOf(b.from)));
+
+                const settleCard = items.length ? `
+                    <div class="muji-card p-4 mb-3" style="border-color: var(--color-divider); background-color: white;">
+                        <div class="flex items-center justify-between">
+                            <div class="text-sm font-bold" style="color: var(--color-text-main);">結清計算</div>
+                            <div class="text-xs text-gray-500">（排除：手動已結清、誰結帳=各自；支援多人付款，並自動互相抵銷）</div>
+                        </div>
+                        ${settlePairs.length ? `
+                            <div class="mt-3 space-y-2">
+                                ${settlePairs.map(x => {
+    const isDone = (x.remaining <= 0);
+    const dayKeyEsc = String(dayKey).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    return `
+        <div class="flex items-center justify-between gap-3 p-3 rounded-lg border" style="border-color: var(--color-divider); background-color: ${isDone ? '#d7e4f7' : 'var(--color-bg-primary)'};">
+            <div class="min-w-0">
+                <div class="text-sm font-semibold truncate" style="color: var(--color-text-main);">${x.from} → ${x.to}</div>
+                <div class="text-[11px] text-gray-500 mt-0.5">
+                    ${isDone ? '已結清' : `剩餘：${Math.round(x.remaining).toLocaleString()} VND(đ)（${TWD_SYMBOL} ${formatTwd(x.remaining, 3)}）`}
+                </div>
+            </div>
+
+            <div class="flex items-center gap-3 shrink-0">
+                <div class="text-right">
+                    <div class="text-sm font-semibold" style="color: var(--color-text-main);">${Math.round(x.total).toLocaleString()} VND(đ)</div>
+                    <div class="text-xs text-gray-500">${TWD_SYMBOL} ${formatTwd(x.total, 3)}</div>
+                </div>
+
+                <button onclick="toggleSettleLine('${dayKeyEsc}', '${x.from}', '${x.to}', ${x.total})"
+                    class="flex items-center gap-2 text-[11px] px-2 py-1 rounded-full border hover:shadow-sm transition duration-150"
+                    style="border-color: var(--color-divider); background-color: ${isDone ? '#d7e4f7' : 'white'};">
+                    <span class="inline-flex items-center justify-center w-5 h-5 rounded-full border"
+                        style="border-color: ${isDone ? 'var(--color-accent)' : 'var(--color-divider)'}; background-color: ${isDone ? 'var(--color-accent)' : 'transparent'};">
+                        ${isDone ? '<i class=&quot;fas fa-check text-[11px] text-white&quot;></i>' : ''}
+                    </span>
+                </button>
+            </div>
+        </div>
+    `;
+}).join('')}
+                            </div>
+                        ` : `
+                            <p class="text-sm text-gray-400 mt-2">（本日無需結清／可能已全數結清或皆為各自付款）</p>
+                        `}
+                        <p class="text-[11px] text-gray-500 mt-3">提示：上方「結清計算」的圓形按鈕是用來標記該筆「轉帳」是否已結清（只影響上方結清計算的扣抵/剩餘）。下方每筆明細右側的圓形按鈕才是標記「該筆開銷」是否已結清；明細已結清後，該筆不再列入上方計算。</p>
+                    </div>
+                ` : '';
+
                 const body = items.length
                     ? `<div class="space-y-3 mb-6">${items.map(renderExpenseRow).join('')}</div>`
                     : `<p class="text-center text-gray-400 text-sm mb-6">（這一天尚無記帳紀錄）</p>`;
-                return header + splitCard + body;
+                return header + splitCard + settleCard + body;
             };
 
             // 依 4 天固定順序輸出
@@ -1966,6 +2427,41 @@ function renderConvertTab(container) {
             // 重新渲染列表
             renderExpenseList();
         }
+
+        // NEW: 單筆開銷 - 結清切換（點圓圈標記已結清/未結清；已結清會從每日結清計算中排除）
+        function toggleExpenseSettled(expenseId) {
+    let expenses = getLocalStorage(expensesKey, []);
+    const idx = expenses.findIndex(e => Number(e.id) === Number(expenseId));
+    if (idx < 0) return;
+
+    const exp = expenses[idx] || {};
+    const cur = !!exp.isSettled;
+
+    // 已結清 → 改回未結清：需要提醒（防誤觸）
+    if (cur) {
+        if (!confirm('已結清改回未結清會影響結清結果，確定要取消嗎？')) return;
+
+        const ne = { ...exp, isSettled: false };
+        delete ne.settledBy;
+        ne.lastModifiedAt = new Date().toISOString();
+        expenses[idx] = ne;
+
+        setLocalStorage(expensesKey, expenses);
+        renderExpenseList();
+        return;
+    }
+
+    // 未結清 → 設為結清：視為手動結清
+    expenses[idx] = {
+        ...exp,
+        isSettled: true,
+        settledBy: 'manual',
+        lastModifiedAt: new Date().toISOString()
+    };
+    setLocalStorage(expensesKey, expenses);
+    renderExpenseList();
+}
+
 
         // NEW: 單筆開銷 - 編輯功能（預設隱藏編輯欄，儲存後回到顯示模式）
         function toggleExpenseEdit(expenseId) {
@@ -2010,7 +2506,7 @@ function renderConvertTab(container) {
 
             // 儲存格式：若含「全體」則只存 ['全體']，否則只存 4 人名
             const consumers = consumerChecked.includes('全體') ? ['全體'] : PEOPLE.filter(p => consumerChecked.includes(p));
-            const payers = PEOPLE.filter(p => payerChecked.includes(p));
+            const payers = payerChecked.includes('各自') ? ['各自'] : PEOPLE.filter(p => payerChecked.includes(p));
 
             // 讀取並更新
             let expenses = getLocalStorage(expensesKey, []);
@@ -2247,7 +2743,7 @@ function setupBackupCloudSyncListeners() {
                             }
 
                             refreshCurrentTab();
-                            alertModal('已匯入備份到本機。需要雲端同步時，可再按「上傳本機到雲端」。');
+                            alertModal('已匯入備份到本機。若想立刻同步到雲端（不等切頁/回前景），可按「上傳本機到雲端」。');
                         } catch (e) {
                             console.error(e);
                             alertModal('匯入失敗：備份檔可能不是有效的 JSON。');
@@ -2311,7 +2807,196 @@ function setupBackupCloudSyncListeners() {
 
 
 
-        function setupWalletListeners() {// --- 記帳功能 ---
+        
+// ===============================
+// 匯出總報表（CSV / PDF）
+// ===============================
+function _csvEscape(val) {
+  const s = (val === null || val === undefined) ? "" : String(val);
+  // escape quotes by doubling
+  const escaped = s.replace(/"/g, '""');
+  // wrap in quotes if contains comma, quote, or newline
+  if (/[",\n\r]/.test(escaped)) return `"${escaped}"`;
+  return escaped;
+}
+
+function _formatDateTimeLocal(spentAt, fallbackIso) {
+  // spentAt is typically "YYYY-MM-DDTHH:MM"
+  if (spentAt && typeof spentAt === "string" && spentAt.includes("T")) return spentAt;
+  try {
+    const d = fallbackIso ? new Date(fallbackIso) : new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch (e) {
+    return "";
+  }
+}
+
+function exportReportCSV() {
+  try {
+    const expenses = getLocalStorage(expensesKey, []);
+    const rate = Number(getLocalStorage(exchangeRateKey, currentRate)) || currentRate;
+
+    const catMap = {};
+    (EXPENSE_CATEGORIES || []).forEach(c => { catMap[c.key] = c.name; });
+
+    const header = [
+      "消費時間",
+      "品項",
+      "分類",
+      "金額(VND)",
+      "匯率(VND/TWD)",
+      "金額(TWD)",
+      "誰消費",
+      "誰結帳",
+      "備註",
+      "是否結清"
+    ];
+
+    const rows = [header];
+
+    // Sort by spentAt then timestamp for stable output
+    const sorted = [...expenses].sort((a,b)=>{
+      const sa = _formatDateTimeLocal(a.spentAt, a.timestamp);
+      const sb = _formatDateTimeLocal(b.spentAt, b.timestamp);
+      if (sa < sb) return -1;
+      if (sa > sb) return 1;
+      return (Number(a.id)||0) - (Number(b.id)||0);
+    });
+
+    for (const e of sorted) {
+      const dt = _formatDateTimeLocal(e.spentAt, e.timestamp);
+      const vnd = Number(e.krw) || 0;
+      const twd = Math.round(vnd * rate * 100) / 100;
+
+      const consumers = Array.isArray(e.consumers) ? e.consumers.join("、") : (e.consumers || "");
+      const payers = Array.isArray(e.payers) ? e.payers.join("、") : (e.payers || "");
+      const catName = catMap[e.category] || e.category || "";
+
+      rows.push([
+        dt,
+        e.item || "",
+        catName,
+        vnd,
+        rate,
+        twd,
+        consumers,
+        payers,
+        e.note || "",
+        e.isSettled ? "已結清" : "未結清"
+      ]);
+    }
+
+    const csv = rows.map(r => r.map(_csvEscape).join(",")).join("\r\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" }); // BOM for Excel
+    const a = document.createElement("a");
+    const ts = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const name = `vn_trip_report_${ts.getFullYear()}-${pad(ts.getMonth()+1)}-${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}.csv`;
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+  } catch (err) {
+    console.error(err);
+    alertModal("匯出 CSV 失敗，請打開開發者工具查看錯誤。");
+  }
+}
+
+function exportReportPDF() {
+  try {
+    const expenses = getLocalStorage(expensesKey, []);
+    const rate = Number(getLocalStorage(exchangeRateKey, currentRate)) || currentRate;
+
+    const catMap = {};
+    (EXPENSE_CATEGORIES || []).forEach(c => { catMap[c.key] = c.name; });
+
+    const sorted = [...expenses].sort((a,b)=>{
+      const sa = _formatDateTimeLocal(a.spentAt, a.timestamp);
+      const sb = _formatDateTimeLocal(b.spentAt, b.timestamp);
+      if (sa < sb) return -1;
+      if (sa > sb) return 1;
+      return (Number(a.id)||0) - (Number(b.id)||0);
+    });
+
+    const win = window.open("", "_blank");
+    if (!win) {
+      alertModal("無法開啟列印視窗（可能被瀏覽器阻擋彈出視窗）。請允許彈出視窗後再試一次。");
+      return;
+    }
+
+    const escapeHtml = (s) => String(s ?? "")
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+
+    let rowsHtml = "";
+    for (const e of sorted) {
+      const dt = _formatDateTimeLocal(e.spentAt, e.timestamp);
+      const vnd = Number(e.krw) || 0;
+      const twd = Math.round(vnd * rate * 100) / 100;
+      const consumers = Array.isArray(e.consumers) ? e.consumers.join("、") : (e.consumers || "");
+      const payers = Array.isArray(e.payers) ? e.payers.join("、") : (e.payers || "");
+      const catName = catMap[e.category] || e.category || "";
+
+      rowsHtml += `<tr>
+        <td>${escapeHtml(dt)}</td>
+        <td>${escapeHtml(e.item || "")}</td>
+        <td>${escapeHtml(catName)}</td>
+        <td style="text-align:right;">${escapeHtml(vnd)}</td>
+        <td style="text-align:right;">${escapeHtml(rate)}</td>
+        <td style="text-align:right;">${escapeHtml(twd)}</td>
+        <td>${escapeHtml(consumers)}</td>
+        <td>${escapeHtml(payers)}</td>
+        <td>${escapeHtml(e.note || "")}</td>
+        <td>${e.isSettled ? "已結清" : "未結清"}</td>
+      </tr>`;
+    }
+
+    const title = escapeHtml(getLocalStorage(APP_TITLE_KEY, DEFAULT_TITLE));
+    win.document.open();
+    win.document.write(`<!doctype html><html><head><meta charset="utf-8">
+      <title>${title}｜匯出總報表</title>
+      <style>
+        body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC",Arial; padding:16px;}
+        h1{font-size:18px; margin:0 0 8px;}
+        .meta{font-size:12px; color:#666; margin-bottom:12px;}
+        table{width:100%; border-collapse:collapse; font-size:12px;}
+        th,td{border:1px solid #ddd; padding:6px; vertical-align:top;}
+        th{background:#f5f5f5;}
+        @media print {
+          body{padding:0;}
+          .no-print{display:none;}
+        }
+      </style>
+    </head><body>
+      <h1>${title}｜匯出總報表</h1>
+      <div class="meta">匯率(VND/TWD)：${escapeHtml(rate)}　｜　匯出時間：${escapeHtml(new Date().toLocaleString())}</div>
+      <div class="no-print" style="margin:0 0 12px;">
+        <button onclick="window.print()">列印 / 另存為 PDF</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>消費時間</th><th>品項</th><th>分類</th>
+            <th>金額(VND)</th><th>匯率</th><th>金額(TWD)</th>
+            <th>誰消費</th><th>誰結帳</th><th>備註</th><th>結清</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml || `<tr><td colspan="10" style="text-align:center; color:#666;">目前沒有記帳紀錄。</td></tr>`}</tbody>
+      </table>
+    </body></html>`);
+    win.document.close();
+    // Let the window finish rendering, then prompt print
+    setTimeout(()=>{ try{ win.focus(); }catch(e){} }, 300);
+  } catch (err) {
+    console.error(err);
+    alertModal("匯出 PDF 失敗，請打開開發者工具查看錯誤。");
+  }
+}
+
+
+function setupWalletListeners() {// --- 記帳功能 ---
             const photoInput = document.getElementById('expense-photo');
             let base64Photo = null;
             const expenseTimeInput = document.getElementById('expense-time');
@@ -2324,6 +3009,38 @@ function setupBackupCloudSyncListeners() {
             // 預設帶入現在時間，使用者可自行調整
             setExpenseTimeNow();
 
+
+// --- 勾選互斥規則（避免誤觸）---
+// 「誰消費」：勾選全體時，其他自動取消；勾選其他時，全體自動取消
+document.querySelectorAll('.consume-checkbox').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+        const v = e.target.value;
+        if (v === '全體' && e.target.checked) {
+            document.querySelectorAll('.consume-checkbox').forEach(x => { if (x.value !== '全體') x.checked = false; });
+        } else if (v !== '全體' && e.target.checked) {
+            const all = document.querySelector('.consume-checkbox[value="全體"]');
+            if (all) all.checked = false;
+        }
+    });
+});
+// 「誰結帳」：勾選各自時，其他自動取消；勾選其他時，各自自動取消
+document.querySelectorAll('.payer-checkbox').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+        const v = e.target.value;
+        if (v === '各自' && e.target.checked) {
+            document.querySelectorAll('.payer-checkbox').forEach(x => { if (x.value !== '各自') x.checked = false; });
+        } else if (v !== '各自' && e.target.checked) {
+            const self = document.querySelector('.payer-checkbox[value="各自"]');
+            if (self) self.checked = false;
+        }
+    });
+});
+
+// --- 匯出總報表 ---
+const exportCsvBtn = document.getElementById('export-csv-btn');
+if (exportCsvBtn) exportCsvBtn.addEventListener('click', exportReportCSV);
+const exportPdfBtn = document.getElementById('export-pdf-btn');
+if (exportPdfBtn) exportPdfBtn.addEventListener('click', exportReportPDF);
 
             photoInput.addEventListener('change', (e) => {
                 const file = e.target.files[0];
@@ -2379,6 +3096,7 @@ function setupBackupCloudSyncListeners() {
                     category: category,
                     consumers: consumersRaw,
                     payers: payers,
+                    isSettled: false,
                     photo: base64Photo,
                     // created time (for debugging/legacy), and spentAt for sorting/grouping
                     timestamp: new Date().toISOString(),
@@ -2994,7 +3712,7 @@ function setupBackupCloudSyncListeners() {
                     <i class="fas fa-cloud-upload-alt mr-1"></i>上傳本機到雲端
                 </button>
             </div>
-            <p class="text-[11px] text-gray-500 mt-2">🔻「從雲端更新本機」：第一次在新裝置使用、或你覺得本機資料不是最新時使用（先拉雲端再開始編輯）。<br>🔺「上傳本機到雲端」：你在本機新增/編輯後想立刻讓其他裝置看到更新；或你剛「匯入備份」後，要把這台的內容同步到雲端時使用。</p>
+            <p class="text-[11px] text-gray-500 mt-2">🔻「從雲端更新本機」：第一次在新裝置使用、或你覺得本機資料不是最新時使用（先拉雲端再開始編輯）。<br>🔺「上傳本機到雲端」：一般情況下，你在本機新增/編輯後，會在「回到前景」或「切頁」時自動同步（包含上傳）。此按鈕用於你想立刻強制推送一次（不等切頁/回前景），例如剛匯入備份、或要馬上讓其他裝置看到更新。</p>
         </div>
     </div>
 </div>
