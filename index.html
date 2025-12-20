@@ -529,6 +529,77 @@ let cloudPushTimer = null;
 let cloudPollTimer = null;
 let cloudLastPushedHash = "";
 let cloudLastRemoteUpdatedAt = null;
+
+// === Event-driven cloud sync (no polling) ===
+let cloudSyncLastAt = 0;
+let cloudSyncInFlight = false;
+let cloudSyncTriggersBound = false;
+const CLOUD_MIN_SYNC_GAP_MS = 5000; // prevent rapid repeat syncs (tab spam, etc.)
+
+async function triggerCloudSync(reason = "") {
+  try {
+    if (!cloudAutoSync) return;
+    if (window.__isAppUnlocked && !window.__isAppUnlocked()) return;
+    if (!supabaseClient) {
+      supabaseClient = initSupabaseClient();
+    }
+    if (!supabaseClient) return;
+
+    const now = Date.now();
+    if (cloudSyncInFlight) return;
+    if (now - cloudSyncLastAt < CLOUD_MIN_SYNC_GAP_MS) return;
+
+    cloudSyncLastAt = now; // set early to prevent re-entrancy via refreshCurrentTab()
+    cloudSyncInFlight = true;
+
+    await pullFromCloud(false);
+    // push is debounced; this prevents writing on every tiny UI action
+    scheduleCloudPush();
+  } catch (e) {
+    console.warn("Cloud sync trigger failed:", reason, e);
+  } finally {
+    cloudSyncInFlight = false;
+  }
+}
+
+function bindCloudSyncTriggers() {
+  if (cloudSyncTriggersBound) return;
+  cloudSyncTriggersBound = true;
+
+  // 僅在回到前景時同步
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) triggerCloudSync("visibilitychange");
+  });
+}
+// === End event-driven cloud sync ===
+
+
+function _cloudGetStatus(err) {
+  try {
+    if (!err) return null;
+    if (typeof err.status === "number") return err.status;
+    if (typeof err.statusCode === "number") return err.statusCode;
+    if (typeof err.code === "number") return err.code;
+    // supabase-js / postgrest 常見：{ code: 'PGRST...' , message: '...', details: '...' }
+    const msg = String(err.message || "");
+    const m = msg.match(/status\s*\(?\s*(\d{3})\s*\)?/i);
+    if (m) return Number(m[1]);
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function _cloudDisableAutoSync(reason) {
+  try {
+    cloudAutoSync = false;
+    clearInterval(cloudPollTimer);
+    cloudPollTimer = null;
+    console.warn("[CloudSync] auto-sync disabled:", reason || "");
+  } catch (e) {}
+}
+
+
 let cloudApplyingRemoteSnapshot = false;
 
 function initSupabaseClient() {
@@ -563,16 +634,66 @@ function buildLocalSnapshot() {
 }
 
 async function ensureSharedDocExists() {
-  if (!supabaseClient) return;
+  // 安全版本：只在「雲端尚未有資料」時才建立，不會覆蓋既有雲端內容
+  if (!supabaseClient) return false;
   try {
-    // 若不存在就建立一筆（upsert）
-    const now = new Date().toISOString();
-    const empty = buildLocalSnapshot();
-    await supabaseClient
+    const { data, error } = await supabaseClient
       .from("shared_docs")
-      .upsert({ id: SHARED_DOC_ID, data: empty, updated_at: now }, { onConflict: "id" });
+      .select("id")
+      .eq("id", SHARED_DOC_ID)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (data && data.id) return true;
+
+    const now = new Date().toISOString();
+    const initSnap = buildLocalSnapshot();
+    // 若本機也沒有任何資料，就先不建立（避免空資料誤導）
+    if (!initSnap || Object.keys(initSnap).length === 0) return false;
+
+    const { error: insErr } = await supabaseClient
+      .from("shared_docs")
+      .insert({ id: SHARED_DOC_ID, data: initSnap, updated_at: now });
+
+    if (insErr) throw insErr;
+    return true;
   } catch (e) {
+    const st = _cloudGetStatus(e);
+    if (st === 401) {
+      _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
+    }
     console.error("[CloudSync] ensure doc failed:", e);
+    return false;
+  }
+}
+
+function isSnapshotEmpty(snap) {
+  return !snap || Object.keys(snap).length === 0;
+}
+
+async function fetchRemoteDoc() {
+  if (!supabaseClient) return null;
+  try {
+    const { data, error } = await supabaseClient
+      .from("shared_docs")
+      .select("data, updated_at")
+      .eq("id", SHARED_DOC_ID)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) return null;
+    return data;
+  } catch (e) {
+    // 0 rows / 尚未建立雲端資料：不用當成錯誤
+    if (e && (e.code === "PGRST116" || String(e.message || "").includes("Cannot coerce the result"))) {
+      return null;
+    }
+    const st = _cloudGetStatus(e);
+    if (st === 401) {
+      _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
+    }
+    console.error("[CloudSync] fetch remote failed:", e);
+    return null;
   }
 }
 
@@ -580,74 +701,154 @@ function scheduleCloudPush() {
   if (!cloudAutoSync) return;
   if (cloudApplyingRemoteSnapshot) return;
   clearTimeout(cloudPushTimer);
-  cloudPushTimer = setTimeout(pushToCloud, 800);
+  cloudPushTimer = setTimeout(() => pushToCloud(false), 800);
 }
 
-async function pushToCloud() {
+async function pushToCloud(force = false, overrideSnapshot = null) {
   if (!supabaseClient) return;
   try {
-    const snapshot = buildLocalSnapshot();
-    const hash = JSON.stringify(snapshot);
-    if (hash === cloudLastPushedHash) return;
+    const localPartial = overrideSnapshot && typeof overrideSnapshot === "object" ? overrideSnapshot : buildLocalSnapshot();
+
+    // 安全保護：自動同步時，本機完全沒資料就不推（避免把雲端洗成空/不完整）
+    if (!force && isSnapshotEmpty(localPartial)) return;
+
+    const remote = await fetchRemoteDoc();
+    const base = (remote && remote.data && typeof remote.data === "object") ? remote.data : {};
+
+    // 合併：保留雲端既有 keys，只用本機有的 keys 覆寫（避免「本機只有匯率」就把雲端其他資料清掉）
+    const merged = { ...base, ...localPartial };
+
+    // 只保留我們允許同步的 keys
+    const cleaned = {};
+    for (const k of SYNC_KEYS) {
+      if (!(k in merged)) continue;
+      const v = merged[k];
+      if (v === null || v === undefined) continue;
+      cleaned[k] = v;
+    }
+
+    if (!force && isSnapshotEmpty(cleaned)) return;
+
+    const hash = JSON.stringify(cleaned);
+    if (!force && hash === cloudLastPushedHash) return;
 
     cloudLastPushedHash = hash;
     const now = new Date().toISOString();
 
     const { data, error } = await supabaseClient
       .from("shared_docs")
-      .upsert({ id: SHARED_DOC_ID, data: snapshot, updated_at: now }, { onConflict: "id" })
+      .upsert({ id: SHARED_DOC_ID, data: cleaned, updated_at: now }, { onConflict: "id" })
       .select("updated_at")
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
     cloudLastRemoteUpdatedAt = data?.updated_at || now;
   } catch (e) {
+    const st = _cloudGetStatus(e);
+    if (st === 401) {
+      _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
+    }
     console.error("[CloudSync] push failed:", e);
   }
 }
 
 async function pullFromCloud(force = false) {
-  if (!supabaseClient) return;
-  try {
-    const { data, error } = await supabaseClient
-      .from("shared_docs")
-      .select("data, updated_at")
-      .eq("id", SHARED_DOC_ID)
-      .single();
+  if (!supabaseClient) return null;
+  const remote = await fetchRemoteDoc();
+  if (!remote) return null;
 
-    if (error) throw error;
-    if (!data) return;
-
-    const remoteUpdatedAt = data.updated_at || null;
-    if (!force && remoteUpdatedAt && cloudLastRemoteUpdatedAt && remoteUpdatedAt <= cloudLastRemoteUpdatedAt) {
-      return;
-    }
-
-    // 防止自己剛推上去又被拉回來造成循環
-    cloudLastRemoteUpdatedAt = remoteUpdatedAt;
-
-    if (data.data) {
-      applyRemoteSnapshot(data.data);
-    }
-  } catch (e) {
-    console.error("[CloudSync] pull failed:", e);
+  const remoteUpdatedAt = remote.updated_at || null;
+  if (!force && remoteUpdatedAt && cloudLastRemoteUpdatedAt && remoteUpdatedAt <= cloudLastRemoteUpdatedAt) {
+    return remote;
   }
+
+  // 防止自己剛推上去又被拉回來造成循環
+  cloudLastRemoteUpdatedAt = remoteUpdatedAt;
+
+  if (remote.data) {
+    applyRemoteSnapshot(remote.data);
+  }
+  return remote;
 }
 
 function applyRemoteSnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== "object") return;
-  for (const k of SYNC_KEYS) {
-    if (!(k in snapshot)) continue;
-    const v = snapshot[k];
-    // Never write null/undefined into localStorage; keep app defaults instead.
-    if (v === null || v === undefined) continue;
-    try {
-      localStorage.setItem(k, JSON.stringify(v));
-    } catch (e) {}
+  cloudApplyingRemoteSnapshot = true;
+  try {
+    for (const k of SYNC_KEYS) {
+      if (!(k in snapshot)) continue;
+      const v = snapshot[k];
+      // Never write null/undefined into localStorage; keep app defaults instead.
+      if (v === null || v === undefined) continue;
+      try {
+        localStorage.setItem(k, JSON.stringify(v));
+      } catch (e) {}
+    }
+  } finally {
+    cloudApplyingRemoteSnapshot = false;
   }
 }
 
-function startCloudSync() {
+function mergeExpensesArrays(remoteArr, localArr) {
+  const r = Array.isArray(remoteArr) ? remoteArr : [];
+  const l = Array.isArray(localArr) ? localArr : [];
+  if (r.length === 0 && l.length === 0) return remoteArr || localArr || [];
+
+  const map = new Map();
+  const toTime = (x) => {
+    const s = (x && (x.lastModifiedAt || x.modifiedAt || x.updatedAt || x.timestamp || x.createdAt)) ? String(x.lastModifiedAt || x.modifiedAt || x.updatedAt || x.timestamp || x.createdAt) : "";
+    const t = Date.parse(s);
+    return Number.isFinite(t) ? t : 0;
+  };
+  const put = (e) => {
+    if (!e || typeof e !== "object") return;
+    const id = e.id;
+    if (id === null || id === undefined) return;
+    const prev = map.get(id);
+    if (!prev) {
+      map.set(id, e);
+      return;
+    }
+    const tPrev = toTime(prev);
+    const tNew = toTime(e);
+    if (tNew >= tPrev) map.set(id, e);
+  };
+
+  r.forEach(put);
+  l.forEach(put);
+
+  return Array.from(map.values());
+}
+
+function mergeSnapshotsPreferRemote(remoteSnap, localSnap) {
+  const remoteObj = (remoteSnap && typeof remoteSnap === "object") ? remoteSnap : {};
+  const localObj = (localSnap && typeof localSnap === "object") ? localSnap : {};
+
+  const merged = { ...remoteObj };
+
+  // 只用本機去補「雲端沒有的 key」（避免覆蓋雲端）
+  for (const k of SYNC_KEYS) {
+    if (k in merged) continue;
+    if (k in localObj) merged[k] = localObj[k];
+  }
+
+  // 記帳合併：以 id 合併兩邊的 expenses，保留較新的那筆
+  if (expensesKey in remoteObj || expensesKey in localObj) {
+    merged[expensesKey] = mergeExpensesArrays(remoteObj[expensesKey], localObj[expensesKey]);
+  }
+
+  return merged;
+}
+
+function refreshCurrentTab() {
+  try {
+    const active = document.querySelector(".nav-item.active");
+    const tab = active ? active.getAttribute("data-tab") : null;
+    if (tab) changeTab(tab);
+  } catch (e) {}
+}
+
+async function startCloudSync() {
   if (!cloudAutoSync) return;
 
   // 只在解鎖後開始同步（避免被未授權者一直打 API）
@@ -658,21 +859,56 @@ function startCloudSync() {
   }
   if (!supabaseClient) return;
 
-  ensureSharedDocExists().then(() => pullFromCloud(true));
+  // 先記下本機快照（用於和雲端做安全合併）
+  const localBefore = buildLocalSnapshot();
+
+  // 先拉雲端（pull-first），避免本機空資料覆蓋雲端
+  const remote = await fetchRemoteDoc();
+
+  if (remote && remote.data && typeof remote.data === "object") {
+    const remoteSnap = remote.data;
+
+    // 合併：遠端為主，僅補上本機缺的；expenses 會做 id 合併
+    const mergedSnap = mergeSnapshotsPreferRemote(remoteSnap, localBefore);
+
+    applyRemoteSnapshot(mergedSnap);
+    cloudLastRemoteUpdatedAt = remote.updated_at || cloudLastRemoteUpdatedAt;
+
+    // 避免第一次同步後畫面不更新
+    refreshCurrentTab();
+
+    // 若合併後比雲端多（例如本機多了幾筆記帳），推一次回雲端做統一
+    try {
+      const a = JSON.stringify(mergedSnap);
+      const b = JSON.stringify(remoteSnap);
+      if (a !== b) {
+        await pushToCloud(true, mergedSnap);
+      } else {
+        cloudLastPushedHash = b;
+      }
+    } catch (e) {}
+  } else {
+    // 雲端尚無資料：只有在本機真的有資料時才建立/上傳
+    if (!isSnapshotEmpty(localBefore)) {
+      await pushToCloud(true, localBefore);
+    }
+  }
 
   clearInterval(cloudPollTimer);
-  cloudPollTimer = setInterval(() => pullFromCloud(false), 15000);
+  cloudPollTimer = null;
+  bindCloudSyncTriggers();
 }
+
 
 // 解鎖後自動啟動同步
 (function bindUnlockHook() {
   const prev = window.__onAppUnlocked;
   window.__onAppUnlocked = function () {
     try { if (typeof prev === "function") prev(); } catch (e) {}
-    startCloudSync();
+    startCloudSync().catch(() => {});
   };
   // 如果一開始就已經解鎖，直接啟動
-  try { if (window.__isAppUnlocked && window.__isAppUnlocked()) startCloudSync(); } catch (e) {}
+  try { if (window.__isAppUnlocked && window.__isAppUnlocked()) startCloudSync().catch(() => {}); } catch (e) {}
 })();
 
 // setLocalStorage 包一層：每次寫入 localStorage，就自動排程推雲端
@@ -1322,12 +1558,27 @@ case 'WALLET':
                     <button id="add-expense-btn" class="muji-btn w-full mt-4">紀錄開銷</button>
                 </div>
 
+                                <div class="muji-card p-4 mb-6">
+                    <h3 class="text-lg font-semibold mb-3" style="color: var(--color-text-main);">📤 匯出總報表</h3>
+                    <div class="grid grid-cols-2 gap-3">
+                        <button id="export-csv-btn" class="muji-btn text-sm">匯出 CSV</button>
+                        <button id="export-pdf-btn" class="muji-btn-light text-sm" style="border-color: var(--color-divider);">匯出 PDF</button>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-2">CSV 可用 Excel 開啟；PDF 會開新視窗並觸發列印（可另存為 PDF）。</p>
+                </div>
+
                 <h3 class="text-xl font-bold mb-3" style="color: var(--color-text-main);">📜 記帳歷史</h3>
                 <div id="expense-list-container">
                     ${expenses.length === 0 ? '<p class="text-center text-gray-500 p-4">目前沒有記帳紀錄。</p>' : ''}
                 </div>
             `;
             container.innerHTML = html;
+
+            // 匯出報表（CSV/PDF）
+            const csvBtn = document.getElementById('export-csv-btn');
+            if (csvBtn) csvBtn.addEventListener('click', exportReportCSV);
+            const pdfBtn = document.getElementById('export-pdf-btn');
+            if (pdfBtn) pdfBtn.addEventListener('click', exportReportPDF);
             setupWalletListeners();
             renderExpenseList();
         }
@@ -1868,8 +2119,61 @@ case 'WALLET':
                         <li><span class="font-medium" style="color: var(--color-text-main);">韓屋住宿：</span>在傳統韓屋內需脫鞋，注意保持安靜，以維護環境。</li>
                     </ul>
                 </div>
-            `;
+            
+                <div class="muji-card p-4 mb-6">
+                    <h3 class="text-lg font-semibold mb-3 border-b pb-2" style="color: var(--color-text-main); border-color: var(--color-divider);">☁️ 雲端同步 / 備份</h3>
+                    <div class="text-sm text-gray-700 leading-relaxed">
+                        <ul class="list-disc pl-5 space-y-1">
+                            <li>雲端同步：同一個共享代號的裝置之間會互相同步資料</li>
+                            <li>備份匯出：可把目前資料打包成 JSON 檔，方便離線保存</li>
+                        </ul>
+                    </div>
+
+                    <div class="mt-3 p-3 rounded-lg text-sm" style="background-color: var(--color-bg-primary);">
+                        <div class="flex items-center justify-between">
+                            <span class="font-medium">狀態</span>
+                            <span id="cloud-sync-status" class="text-gray-600">-</span>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3 mt-4">
+                        <button id="cloud-pull-btn" class="muji-btn-light text-sm" style="border-color: var(--color-divider);">從雲端套用</button>
+                        <button id="cloud-push-btn" class="muji-btn text-sm">上傳到雲端</button>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3 mt-3">
+                        <button id="export-backup-btn" class="muji-btn-light text-sm" style="border-color: var(--color-divider);">匯出備份 JSON</button>
+                        <button id="import-backup-btn" class="muji-btn-light text-sm" style="border-color: var(--color-divider);">匯入備份 JSON</button>
+                        <input id="import-backup-file" type="file" accept="application/json" class="hidden" />
+                    </div>
+
+                    <p class="text-[11px] text-gray-500 mt-2">提示：匯入會覆蓋同名欄位（只套用本 App 會用到的資料鍵）。</p>
+                </div>
+`;
             container.innerHTML = html;
+
+            // 雲端同步/備份按鈕
+            const cloudPullBtn = document.getElementById('cloud-pull-btn');
+            if (cloudPullBtn) cloudPullBtn.addEventListener('click', () => { pullFromCloud(true); setTimeout(updateCloudStatusLabel, 300); });
+
+            const cloudPushBtn = document.getElementById('cloud-push-btn');
+            if (cloudPushBtn) cloudPushBtn.addEventListener('click', () => { pushToCloud(true); setTimeout(updateCloudStatusLabel, 300); });
+
+            const exportBackupBtn = document.getElementById('export-backup-btn');
+            if (exportBackupBtn) exportBackupBtn.addEventListener('click', exportLocalBackupJSON);
+
+            const importBackupBtn = document.getElementById('import-backup-btn');
+            const importBackupFile = document.getElementById('import-backup-file');
+            if (importBackupBtn && importBackupFile) {
+                importBackupBtn.addEventListener('click', () => importBackupFile.click());
+                importBackupFile.addEventListener('change', (e) => {
+                    const f = e.target.files && e.target.files[0];
+                    importLocalBackupJSON(f);
+                    e.target.value = '';
+                });
+            }
+
+            updateCloudStatusLabel();
             setupInfoListeners();
         }
         
@@ -1955,7 +2259,258 @@ case 'WALLET':
             }
         });
 
-    </script>
+    
+
+// ===============================
+// Cloud status label (for Info tab)
+// ===============================
+function updateCloudStatusLabel() {
+  const el = document.getElementById('cloud-sync-status');
+  if (!el) return;
+
+  try {
+    const unlocked = (typeof window.__isAppUnlocked === 'function') ? window.__isAppUnlocked() : true;
+    if (!unlocked) { el.textContent = '未解鎖'; return; }
+    if (typeof supabaseClient === 'undefined' || !supabaseClient) { el.textContent = '未連線'; return; }
+    if (typeof cloudSyncInFlight !== 'undefined' && cloudSyncInFlight) { el.textContent = '同步中…'; return; }
+
+    const last = (typeof cloudSyncLastAt !== 'undefined' && cloudSyncLastAt) ? new Date(cloudSyncLastAt) : null;
+    if (last && !isNaN(last.getTime())) {
+      el.textContent = '上次同步 ' + _formatDateTimeLocal(last.toISOString(), last.toISOString());
+    } else {
+      el.textContent = '已連線';
+    }
+  } catch (e) {
+    el.textContent = '—';
+  }
+}
+
+// ===============================
+// Wallet export helpers (CSV / PDF)
+// ===============================
+function _pad2(n){ return String(n).padStart(2,'0'); }
+
+function _formatDateTimeLocal(spentAtIso, fallbackIso){
+  const iso = spentAtIso || fallbackIso;
+  if(!iso) return '';
+  try{
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    const y = d.getFullYear();
+    const m = _pad2(d.getMonth()+1);
+    const day = _pad2(d.getDate());
+    const hh = _pad2(d.getHours());
+    const mm = _pad2(d.getMinutes());
+    return `${y}-${m}-${day} ${hh}:${mm}`;
+  }catch(e){
+    return String(iso||'');
+  }
+}
+
+function _escapeCsvCell(v){
+  const s = (v===null||v===undefined) ? '' : String(v);
+  const needs = /[",\n\r]/.test(s);
+  const out = s.replace(/"/g,'""');
+  return needs ? `"${out}"` : out;
+}
+
+function _downloadTextFile(filename, text, mime="text/plain;charset=utf-8"){
+  try{
+    const blob = new Blob([text], {type:mime});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 500);
+  }catch(err){
+    console.error(err);
+    alertModal("匯出失敗，請稍後再試。");
+  }
+}
+
+function exportReportCSV(){
+  try{
+    const expenses = getLocalStorage(expensesKey, []);
+    const rate = Number(getLocalStorage(exchangeRateKey, currentRate)) || currentRate;
+
+    const catMap = {};
+    (EXPENSE_CATEGORIES || []).forEach(c => { catMap[c.key] = c.name; });
+
+    const header = ["消費時間","品項","分類","金額(KRW)","匯率(KRW/TWD)","金額(TWD)","有照片"];
+    const rows = [header];
+
+    const sorted = [...expenses].sort((a,b)=>{
+      const sa = _formatDateTimeLocal(a.timestamp, a.timestamp);
+      const sb = _formatDateTimeLocal(b.timestamp, b.timestamp);
+      if (sa < sb) return -1;
+      if (sa > sb) return 1;
+      return (Number(a.id)||0) - (Number(b.id)||0);
+    });
+
+    sorted.forEach(exp=>{
+      const krw = Number(exp.krw) || 0;
+      const twd = Math.round(krwToTwd(krw) * 100) / 100;
+      rows.push([
+        _formatDateTimeLocal(exp.timestamp, exp.timestamp),
+        exp.item || '',
+        catMap[exp.category] || exp.category || '其他',
+        Math.round(krw),
+        rate,
+        twd,
+        exp.photo ? 'Y' : 'N'
+      ]);
+    });
+
+    const csv = rows.map(r => r.map(_escapeCsvCell).join(',')).join('\n');
+    const now = new Date();
+    const filename = `${APP_ID}_report_${now.getFullYear()}${_pad2(now.getMonth()+1)}${_pad2(now.getDate())}_${_pad2(now.getHours())}${_pad2(now.getMinutes())}.csv`;
+    _downloadTextFile(filename, csv, "text/csv;charset=utf-8");
+    alertModal("已匯出 CSV（可用 Excel 開啟）。");
+  }catch(err){
+    console.error(err);
+    alertModal("匯出 CSV 失敗，請稍後再試。");
+  }
+}
+
+function exportReportPDF(){
+  try{
+    const expenses = getLocalStorage(expensesKey, []);
+    const rate = Number(getLocalStorage(exchangeRateKey, currentRate)) || currentRate;
+
+    const catMap = {};
+    (EXPENSE_CATEGORIES || []).forEach(c => { catMap[c.key] = c.name; });
+
+    const sorted = [...expenses].sort((a,b)=>{
+      const sa = _formatDateTimeLocal(a.timestamp, a.timestamp);
+      const sb = _formatDateTimeLocal(b.timestamp, b.timestamp);
+      if (sa < sb) return -1;
+      if (sa > sb) return 1;
+      return (Number(a.id)||0) - (Number(b.id)||0);
+    });
+
+    const totalKRW = sorted.reduce((s,e)=>s+(Number(e.krw)||0),0);
+    const totalTWD = Math.round(krwToTwd(totalKRW) * 100) / 100;
+
+    const rowsHtml = sorted.map(exp=>{
+      const krw = Number(exp.krw) || 0;
+      const twd = Math.round(krwToTwd(krw) * 100) / 100;
+      const dt = _formatDateTimeLocal(exp.timestamp, exp.timestamp);
+      const cat = catMap[exp.category] || exp.category || '其他';
+      const photo = exp.photo ? 'Y' : 'N';
+      return `<tr>
+        <td>${dt}</td>
+        <td>${(exp.item||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>
+        <td>${String(cat).replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>
+        <td style="text-align:right;">${Math.round(krw)}</td>
+        <td style="text-align:right;">${rate}</td>
+        <td style="text-align:right;">${twd}</td>
+        <td style="text-align:center;">${photo}</td>
+      </tr>`;
+    }).join('');
+
+    const now = new Date();
+    const title = "記帳總報表";
+    const subtitle = `匯率(KRW/TWD)：${rate}　｜　總計：${Math.round(totalKRW)} KRW（約 ${totalTWD} TWD）　｜　匯出時間：${now.getFullYear()}-${_pad2(now.getMonth()+1)}-${_pad2(now.getDate())} ${_pad2(now.getHours())}:${_pad2(now.getMinutes())}`;
+
+    const html = `<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>${title}</title>
+<style>
+  body{ font-family: -apple-system, BlinkMacSystemFont, "Noto Sans TC", "Segoe UI", Arial, sans-serif; padding: 18px; }
+  h1{ font-size: 18px; margin: 0 0 6px; }
+  .sub{ font-size: 12px; color: #555; margin: 0 0 12px; }
+  table{ width:100%; border-collapse: collapse; font-size: 12px; }
+  th,td{ border: 1px solid #ddd; padding: 6px 8px; vertical-align: top; }
+  th{ background: #f6f6f6; text-align:left; }
+</style></head>
+<body>
+  <h1>${title}</h1>
+  <div class="sub">${subtitle}</div>
+  <table>
+    <thead>
+      <tr>
+        <th>消費時間</th><th>品項</th><th>分類</th>
+        <th style="text-align:right;">金額(KRW)</th>
+        <th style="text-align:right;">匯率</th>
+        <th style="text-align:right;">金額(TWD)</th>
+        <th style="text-align:center;">有照片</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml || '<tr><td colspan="7" style="text-align:center;color:#777;">無資料</td></tr>'}</tbody>
+  </table>
+  <script>window.onload = ()=>{ setTimeout(()=>window.print(), 200); };</script>
+</body></html>`;
+
+    const win = window.open("", "_blank");
+    if(!win){
+      alertModal("瀏覽器阻擋新視窗，請允許彈出視窗後再匯出 PDF。");
+      return;
+    }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  }catch(err){
+    console.error(err);
+    alertModal("匯出 PDF 失敗，請稍後再試。");
+  }
+}
+
+// ===============================
+// Local backup (JSON) helpers
+// ===============================
+function exportLocalBackupJSON(){
+  try{
+    const snap = buildLocalSnapshot();
+    const payload = {
+      version: 1,
+      appId: APP_ID,
+      exportedAt: new Date().toISOString(),
+      data: snap
+    };
+    const now = new Date();
+    const filename = `${APP_ID}_backup_${now.getFullYear()}${_pad2(now.getMonth()+1)}${_pad2(now.getDate())}_${_pad2(now.getHours())}${_pad2(now.getMinutes())}.json`;
+    _downloadTextFile(filename, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+    alertModal("已匯出備份檔（JSON）。");
+  }catch(err){
+    console.error(err);
+    alertModal("匯出備份失敗，請稍後再試。");
+  }
+}
+
+function importLocalBackupJSON(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(){
+    try{
+      const txt = String(reader.result||'');
+      const obj = JSON.parse(txt);
+      const data = obj && obj.data ? obj.data : obj;
+      if(!data || typeof data !== 'object'){
+        alertModal("備份檔格式不正確。");
+        return;
+      }
+      const keys = (typeof SYNC_KEYS !== 'undefined' && Array.isArray(SYNC_KEYS)) ? SYNC_KEYS : [];
+      keys.forEach(k=>{
+        if(Object.prototype.hasOwnProperty.call(data, k)){
+          localStorage.setItem(k, data[k]);
+        }
+      });
+
+      const active = document.querySelector('.nav-item.active');
+      const tab = active ? active.getAttribute('data-tab') : 'FLIGHTS_STAY';
+      if (typeof changeTab === 'function') changeTab(tab);
+      alertModal("已匯入備份並套用。");
+    }catch(err){
+      console.error(err);
+      alertModal("匯入失敗：備份檔可能已損壞或格式不支援。");
+    }
+  };
+  reader.readAsText(file);
+}
+</script>
 
   </div>
 </body>
