@@ -239,7 +239,7 @@
             </button>
             <button class="nav-item flex flex-col items-center p-2" data-tab="INFO">
                 <i class="fas fa-info-circle text-xl"></i>
-                <span class="text-xs mt-1">資訊&備份</span>
+                <span class="text-xs mt-1">資訊</span>
             </button>
         </nav>
     </footer>
@@ -277,14 +277,6 @@
                     <label for="modal-notes" class="block text-sm font-medium" style="color: var(--color-text-main);">備註</label>
                     <input type="text" id="modal-notes" class="w-full p-2 border rounded-lg" placeholder="額外說明, e.g. 米其林一星" style="border-color: var(--color-divider);">
                 </div>
-
-                <div>
-                    <label for="modal-photos" class="block text-sm font-medium" style="color: var(--color-text-main);">照片（可多選，不限數量）</label>
-                    <input type="file" id="modal-photos" accept="image/*" multiple class="w-full p-2 border rounded-lg bg-white" style="border-color: var(--color-divider);">
-                    <div id="modal-photo-preview" class="mt-2 flex flex-wrap gap-2"></div>
-                    <p class="text-xs mt-1" style="color: var(--color-text-muted);">點縮圖可放大查看；編輯時可刪除單張照片。</p>
-                </div>
-
                 
                 <div class="flex items-center space-x-4">
                     <div class="flex-1">
@@ -292,18 +284,18 @@
                         <input type="text" id="modal-hours" class="w-full p-2 border rounded-lg" placeholder="e.g. 11:00–21:00" style="border-color: var(--color-divider);">
                     </div>
                     <div class="flex-1">
-                        <label for="modal-address" class="block text-sm font-medium" style="color: var(--color-text-main);">地址 (address_copy)</label>
-                        <input type="text" id="modal-address" class="w-full p-2 border rounded-lg" placeholder="韓文或中文地址" style="border-color: var(--color-divider);">
+                        <label for="modal-address" class="block text-sm font-medium mb-1" style="color: var(--color-text-main);">地址 (address_copy)</label>
+                        <input type="text" id="modal-address" class="w-full p-2 border rounded-lg text-sm" placeholder="韓文或中文地址" style="border-color: var(--color-divider);">
                     </div>
                 </div>
 
                 <div class="flex items-center space-x-4">
                     <div class="flex-1">
-                        <label for="modal-gmap" class="block text-sm font-medium" style="color: var(--color-text-main);">Google Map Link (link)</label>
-                        <input type="url" id="modal-gmap" class="w-full p-2 border rounded-lg text-xs" placeholder="http://googleusercontent.com/maps..." style="border-color: var(--color-divider);">
+                        <label for="modal-gmap" class="block text-sm font-medium mb-1" style="color: var(--color-text-main);">Google Map Link (link)</label>
+                        <input type="url" id="modal-gmap" class="w-full p-2 border rounded-lg text-xs" placeholder="https://maps.app.goo.gl/..." style="border-color: var(--color-divider);">
                     </div>
                     <div class="flex-1">
-                        <label for="modal-naver" class="block text-sm font-medium" style="color: var(--color-text-main);">Naver Map Link (naver_link)</label>
+                        <label for="modal-naver" class="block text-sm font-medium mb-1" style="color: var(--color-text-main);">Naver Map Link (naver_link)</label>
                         <input type="url" id="modal-naver" class="w-full p-2 border rounded-lg text-xs" placeholder="https://naver.me/..." style="border-color: var(--color-divider);">
                     </div>
                 </div>
@@ -338,6 +330,15 @@
                     <input type="checkbox" id="modal-highlight" class="h-4 w-4 rounded" style="color: var(--color-text-main); border-color: var(--color-divider);">
                     <label for="modal-highlight" class="ml-2 text-sm font-medium" style="color: var(--color-text-main);">高亮/重要項目 (Highlight)</label>
                 </div>
+
+                <!-- 行程照片 (可多選、不限數量) -->
+                <div>
+                    <label for="modal-photos" class="block text-sm font-medium" style="color: var(--color-text-main);">照片（可多選、不限數量）</label>
+                    <input type="file" id="modal-photos" accept="image/*" multiple class="w-full p-2 border rounded-lg text-sm bg-white" style="border-color: var(--color-divider);">
+                    <p class="text-xs text-gray-500 mt-1">提示：可拖曳縮圖或用「↑ ↓」調整順序；可刪除單張照片。</p>
+                    <div id="modal-photo-manager" class="mt-2 grid grid-cols-4 gap-2"></div>
+                </div>
+
 
 
                 <div class="flex justify-end space-x-3 mt-4">
@@ -537,77 +538,6 @@ let cloudPushTimer = null;
 let cloudPollTimer = null;
 let cloudLastPushedHash = "";
 let cloudLastRemoteUpdatedAt = null;
-
-// === Event-driven cloud sync (no polling) ===
-let cloudSyncLastAt = 0;
-let cloudSyncInFlight = false;
-let cloudSyncTriggersBound = false;
-const CLOUD_MIN_SYNC_GAP_MS = 5000; // prevent rapid repeat syncs (tab spam, etc.)
-
-async function triggerCloudSync(reason = "") {
-  try {
-    if (!cloudAutoSync) return;
-    if (window.__isAppUnlocked && !window.__isAppUnlocked()) return;
-    if (!supabaseClient) {
-      supabaseClient = initSupabaseClient();
-    }
-    if (!supabaseClient) return;
-
-    const now = Date.now();
-    if (cloudSyncInFlight) return;
-    if (now - cloudSyncLastAt < CLOUD_MIN_SYNC_GAP_MS) return;
-
-    cloudSyncLastAt = now; // set early to prevent re-entrancy via refreshCurrentTab()
-    cloudSyncInFlight = true;
-
-    await pullFromCloud(false);
-    // push is debounced; this prevents writing on every tiny UI action
-    scheduleCloudPush();
-  } catch (e) {
-    console.warn("Cloud sync trigger failed:", reason, e);
-  } finally {
-    cloudSyncInFlight = false;
-  }
-}
-
-function bindCloudSyncTriggers() {
-  if (cloudSyncTriggersBound) return;
-  cloudSyncTriggersBound = true;
-
-  // 僅在回到前景時同步
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) triggerCloudSync("visibilitychange");
-  });
-}
-// === End event-driven cloud sync ===
-
-
-function _cloudGetStatus(err) {
-  try {
-    if (!err) return null;
-    if (typeof err.status === "number") return err.status;
-    if (typeof err.statusCode === "number") return err.statusCode;
-    if (typeof err.code === "number") return err.code;
-    // supabase-js / postgrest 常見：{ code: 'PGRST...' , message: '...', details: '...' }
-    const msg = String(err.message || "");
-    const m = msg.match(/status\s*\(?\s*(\d{3})\s*\)?/i);
-    if (m) return Number(m[1]);
-    return null;
-  } catch (_) {
-    return null;
-  }
-}
-
-function _cloudDisableAutoSync(reason) {
-  try {
-    cloudAutoSync = false;
-    clearInterval(cloudPollTimer);
-    cloudPollTimer = null;
-    console.warn("[CloudSync] auto-sync disabled:", reason || "");
-  } catch (e) {}
-}
-
-
 let cloudApplyingRemoteSnapshot = false;
 
 function initSupabaseClient() {
@@ -642,66 +572,16 @@ function buildLocalSnapshot() {
 }
 
 async function ensureSharedDocExists() {
-  // 安全版本：只在「雲端尚未有資料」時才建立，不會覆蓋既有雲端內容
-  if (!supabaseClient) return false;
+  if (!supabaseClient) return;
   try {
-    const { data, error } = await supabaseClient
-      .from("shared_docs")
-      .select("id")
-      .eq("id", SHARED_DOC_ID)
-      .maybeSingle();
-
-    if (error) throw error;
-    if (data && data.id) return true;
-
+    // 若不存在就建立一筆（upsert）
     const now = new Date().toISOString();
-    const initSnap = buildLocalSnapshot();
-    // 若本機也沒有任何資料，就先不建立（避免空資料誤導）
-    if (!initSnap || Object.keys(initSnap).length === 0) return false;
-
-    const { error: insErr } = await supabaseClient
+    const empty = buildLocalSnapshot();
+    await supabaseClient
       .from("shared_docs")
-      .insert({ id: SHARED_DOC_ID, data: initSnap, updated_at: now });
-
-    if (insErr) throw insErr;
-    return true;
+      .upsert({ id: SHARED_DOC_ID, data: empty, updated_at: now }, { onConflict: "id" });
   } catch (e) {
-    const st = _cloudGetStatus(e);
-    if (st === 401) {
-      _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
-    }
     console.error("[CloudSync] ensure doc failed:", e);
-    return false;
-  }
-}
-
-function isSnapshotEmpty(snap) {
-  return !snap || Object.keys(snap).length === 0;
-}
-
-async function fetchRemoteDoc() {
-  if (!supabaseClient) return null;
-  try {
-    const { data, error } = await supabaseClient
-      .from("shared_docs")
-      .select("data, updated_at")
-      .eq("id", SHARED_DOC_ID)
-      .maybeSingle();
-
-    if (error) throw error;
-    if (!data) return null;
-    return data;
-  } catch (e) {
-    // 0 rows / 尚未建立雲端資料：不用當成錯誤
-    if (e && (e.code === "PGRST116" || String(e.message || "").includes("Cannot coerce the result"))) {
-      return null;
-    }
-    const st = _cloudGetStatus(e);
-    if (st === 401) {
-      _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
-    }
-    console.error("[CloudSync] fetch remote failed:", e);
-    return null;
   }
 }
 
@@ -709,154 +589,74 @@ function scheduleCloudPush() {
   if (!cloudAutoSync) return;
   if (cloudApplyingRemoteSnapshot) return;
   clearTimeout(cloudPushTimer);
-  cloudPushTimer = setTimeout(() => pushToCloud(false), 800);
+  cloudPushTimer = setTimeout(pushToCloud, 800);
 }
 
-async function pushToCloud(force = false, overrideSnapshot = null) {
+async function pushToCloud() {
   if (!supabaseClient) return;
   try {
-    const localPartial = overrideSnapshot && typeof overrideSnapshot === "object" ? overrideSnapshot : buildLocalSnapshot();
-
-    // 安全保護：自動同步時，本機完全沒資料就不推（避免把雲端洗成空/不完整）
-    if (!force && isSnapshotEmpty(localPartial)) return;
-
-    const remote = await fetchRemoteDoc();
-    const base = (remote && remote.data && typeof remote.data === "object") ? remote.data : {};
-
-    // 合併：保留雲端既有 keys，只用本機有的 keys 覆寫（避免「本機只有匯率」就把雲端其他資料清掉）
-    const merged = { ...base, ...localPartial };
-
-    // 只保留我們允許同步的 keys
-    const cleaned = {};
-    for (const k of SYNC_KEYS) {
-      if (!(k in merged)) continue;
-      const v = merged[k];
-      if (v === null || v === undefined) continue;
-      cleaned[k] = v;
-    }
-
-    if (!force && isSnapshotEmpty(cleaned)) return;
-
-    const hash = JSON.stringify(cleaned);
-    if (!force && hash === cloudLastPushedHash) return;
+    const snapshot = buildLocalSnapshot();
+    const hash = JSON.stringify(snapshot);
+    if (hash === cloudLastPushedHash) return;
 
     cloudLastPushedHash = hash;
     const now = new Date().toISOString();
 
     const { data, error } = await supabaseClient
       .from("shared_docs")
-      .upsert({ id: SHARED_DOC_ID, data: cleaned, updated_at: now }, { onConflict: "id" })
+      .upsert({ id: SHARED_DOC_ID, data: snapshot, updated_at: now }, { onConflict: "id" })
       .select("updated_at")
-      .maybeSingle();
+      .single();
 
     if (error) throw error;
     cloudLastRemoteUpdatedAt = data?.updated_at || now;
   } catch (e) {
-    const st = _cloudGetStatus(e);
-    if (st === 401) {
-      _cloudDisableAutoSync("401 Unauthorized (RLS/Policy or API key)");
-    }
     console.error("[CloudSync] push failed:", e);
   }
 }
 
 async function pullFromCloud(force = false) {
-  if (!supabaseClient) return null;
-  const remote = await fetchRemoteDoc();
-  if (!remote) return null;
+  if (!supabaseClient) return;
+  try {
+    const { data, error } = await supabaseClient
+      .from("shared_docs")
+      .select("data, updated_at")
+      .eq("id", SHARED_DOC_ID)
+      .single();
 
-  const remoteUpdatedAt = remote.updated_at || null;
-  if (!force && remoteUpdatedAt && cloudLastRemoteUpdatedAt && remoteUpdatedAt <= cloudLastRemoteUpdatedAt) {
-    return remote;
+    if (error) throw error;
+    if (!data) return;
+
+    const remoteUpdatedAt = data.updated_at || null;
+    if (!force && remoteUpdatedAt && cloudLastRemoteUpdatedAt && remoteUpdatedAt <= cloudLastRemoteUpdatedAt) {
+      return;
+    }
+
+    // 防止自己剛推上去又被拉回來造成循環
+    cloudLastRemoteUpdatedAt = remoteUpdatedAt;
+
+    if (data.data) {
+      applyRemoteSnapshot(data.data);
+    }
+  } catch (e) {
+    console.error("[CloudSync] pull failed:", e);
   }
-
-  // 防止自己剛推上去又被拉回來造成循環
-  cloudLastRemoteUpdatedAt = remoteUpdatedAt;
-
-  if (remote.data) {
-    applyRemoteSnapshot(remote.data);
-  }
-  return remote;
 }
 
 function applyRemoteSnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== "object") return;
-  cloudApplyingRemoteSnapshot = true;
-  try {
-    for (const k of SYNC_KEYS) {
-      if (!(k in snapshot)) continue;
-      const v = snapshot[k];
-      // Never write null/undefined into localStorage; keep app defaults instead.
-      if (v === null || v === undefined) continue;
-      try {
-        localStorage.setItem(k, JSON.stringify(v));
-      } catch (e) {}
-    }
-  } finally {
-    cloudApplyingRemoteSnapshot = false;
-  }
-}
-
-function mergeExpensesArrays(remoteArr, localArr) {
-  const r = Array.isArray(remoteArr) ? remoteArr : [];
-  const l = Array.isArray(localArr) ? localArr : [];
-  if (r.length === 0 && l.length === 0) return remoteArr || localArr || [];
-
-  const map = new Map();
-  const toTime = (x) => {
-    const s = (x && (x.lastModifiedAt || x.modifiedAt || x.updatedAt || x.timestamp || x.createdAt)) ? String(x.lastModifiedAt || x.modifiedAt || x.updatedAt || x.timestamp || x.createdAt) : "";
-    const t = Date.parse(s);
-    return Number.isFinite(t) ? t : 0;
-  };
-  const put = (e) => {
-    if (!e || typeof e !== "object") return;
-    const id = e.id;
-    if (id === null || id === undefined) return;
-    const prev = map.get(id);
-    if (!prev) {
-      map.set(id, e);
-      return;
-    }
-    const tPrev = toTime(prev);
-    const tNew = toTime(e);
-    if (tNew >= tPrev) map.set(id, e);
-  };
-
-  r.forEach(put);
-  l.forEach(put);
-
-  return Array.from(map.values());
-}
-
-function mergeSnapshotsPreferRemote(remoteSnap, localSnap) {
-  const remoteObj = (remoteSnap && typeof remoteSnap === "object") ? remoteSnap : {};
-  const localObj = (localSnap && typeof localSnap === "object") ? localSnap : {};
-
-  const merged = { ...remoteObj };
-
-  // 只用本機去補「雲端沒有的 key」（避免覆蓋雲端）
   for (const k of SYNC_KEYS) {
-    if (k in merged) continue;
-    if (k in localObj) merged[k] = localObj[k];
+    if (!(k in snapshot)) continue;
+    const v = snapshot[k];
+    // Never write null/undefined into localStorage; keep app defaults instead.
+    if (v === null || v === undefined) continue;
+    try {
+      localStorage.setItem(k, JSON.stringify(v));
+    } catch (e) {}
   }
-
-  // 記帳合併：以 id 合併兩邊的 expenses，保留較新的那筆
-  if (expensesKey in remoteObj || expensesKey in localObj) {
-    merged[expensesKey] = mergeExpensesArrays(remoteObj[expensesKey], localObj[expensesKey]);
-  }
-
-  return merged;
 }
 
-function refreshCurrentTab() {
-  try {
-    const active = document.querySelector(".nav-item.active");
-    const tab = active ? active.getAttribute("data-tab") : null;
-    if (tab) changeTab(tab);
-  } catch (e) {}
-}
-
-async function startCloudSync() {
+function startCloudSync() {
   if (!cloudAutoSync) return;
 
   // 只在解鎖後開始同步（避免被未授權者一直打 API）
@@ -867,56 +667,21 @@ async function startCloudSync() {
   }
   if (!supabaseClient) return;
 
-  // 先記下本機快照（用於和雲端做安全合併）
-  const localBefore = buildLocalSnapshot();
-
-  // 先拉雲端（pull-first），避免本機空資料覆蓋雲端
-  const remote = await fetchRemoteDoc();
-
-  if (remote && remote.data && typeof remote.data === "object") {
-    const remoteSnap = remote.data;
-
-    // 合併：遠端為主，僅補上本機缺的；expenses 會做 id 合併
-    const mergedSnap = mergeSnapshotsPreferRemote(remoteSnap, localBefore);
-
-    applyRemoteSnapshot(mergedSnap);
-    cloudLastRemoteUpdatedAt = remote.updated_at || cloudLastRemoteUpdatedAt;
-
-    // 避免第一次同步後畫面不更新
-    refreshCurrentTab();
-
-    // 若合併後比雲端多（例如本機多了幾筆記帳），推一次回雲端做統一
-    try {
-      const a = JSON.stringify(mergedSnap);
-      const b = JSON.stringify(remoteSnap);
-      if (a !== b) {
-        await pushToCloud(true, mergedSnap);
-      } else {
-        cloudLastPushedHash = b;
-      }
-    } catch (e) {}
-  } else {
-    // 雲端尚無資料：只有在本機真的有資料時才建立/上傳
-    if (!isSnapshotEmpty(localBefore)) {
-      await pushToCloud(true, localBefore);
-    }
-  }
+  ensureSharedDocExists().then(() => pullFromCloud(true));
 
   clearInterval(cloudPollTimer);
-  cloudPollTimer = null;
-  bindCloudSyncTriggers();
+  cloudPollTimer = setInterval(() => pullFromCloud(false), 15000);
 }
-
 
 // 解鎖後自動啟動同步
 (function bindUnlockHook() {
   const prev = window.__onAppUnlocked;
   window.__onAppUnlocked = function () {
     try { if (typeof prev === "function") prev(); } catch (e) {}
-    startCloudSync().catch(() => {});
+    startCloudSync();
   };
   // 如果一開始就已經解鎖，直接啟動
-  try { if (window.__isAppUnlocked && window.__isAppUnlocked()) startCloudSync().catch(() => {}); } catch (e) {}
+  try { if (window.__isAppUnlocked && window.__isAppUnlocked()) startCloudSync(); } catch (e) {}
 })();
 
 // setLocalStorage 包一層：每次寫入 localStorage，就自動排程推雲端
@@ -1033,32 +798,23 @@ async function startCloudSync() {
             
             // 清空表單與隱藏欄位
             form.reset();
-
-            // photos: reset and load existing when editing
-            __itineraryEditingPhotos = [];
-            const photoInput = document.getElementById('modal-photos');
-            if (photoInput) photoInput.value = '';
-
+            // 綁定照片上傳與 lightbox（只綁一次）
+            _bindItineraryPhotoInputOnce();
+            _bindLightboxOnce();
+            // 初始化本次 modal 的照片清單
+            modalPhotoList = [];
+            document.getElementById('modal-photos').value = '';
             document.getElementById('modal-day-index').value = dayIndex;
             document.getElementById('modal-item-index').value = itemIndex !== null ? itemIndex : '';
             
             // 重設顏色選擇為預設
             document.querySelector(`input[name="modal-bgColor"][value=""]`).checked = true;
-            // 行程照片：重置（安全起見，file input 不能回填）
-            const photoPreview = document.getElementById('modal-photo-preview');
-            if (photoPreview) photoPreview.innerHTML = '';
-
 
 
             if (itemIndex !== null) {
                 // 編輯模式
                 title.textContent = "編輯行程項目";
                 const item = tripData.itinerary[dayIndex].items[itemIndex];
-                try {
-                    if (item && Array.isArray(item.photos)) __itineraryEditingPhotos = item.photos.slice();
-                } catch (e) {}
-                renderModalPhotoPreview();
-
                 document.getElementById('modal-name').value = item.name || '';
                 document.getElementById('modal-time').value = item.time || '';
                 document.getElementById('modal-type').value = item.type || 'Activity';
@@ -1074,23 +830,28 @@ async function startCloudSync() {
                 const colorRadio = document.querySelector(`input[name="modal-bgColor"][value="${savedColor}"]`);
                 if(colorRadio) colorRadio.checked = true;
 
+                // NEW: 載入既有照片到管理區（可排序/刪除）
+                modalPhotoList = (Array.isArray(item.photos) ? item.photos : []).map(src => ({ id: _newPhotoId(), src }));
+                renderModalPhotoManager();
 
             } else {
                 // 新增模式
                 title.textContent = `新增項目到 ${tripData.itinerary[dayIndex].date}`;
+                modalPhotoList = [];
+                renderModalPhotoManager();
             }
 
             modal.classList.remove('hidden');
         }
 
-        async function handleItineraryItemSave(event) {
+        function handleItineraryItemSave(event) {
             event.preventDefault();
-
+            
             const dayIndex = parseInt(document.getElementById('modal-day-index').value, 10);
             const itemIndexStr = document.getElementById('modal-item-index').value;
             const itemIndex = itemIndexStr === '' ? null : parseInt(itemIndexStr, 10);
-
-            // 取得選擇的背景色
+            
+            // NEW: 取得選擇的背景色
             const selectedColor = document.querySelector('input[name="modal-bgColor"]:checked').value;
 
             const newItem = {
@@ -1098,57 +859,18 @@ async function startCloudSync() {
                 name: document.getElementById('modal-name').value.trim(),
                 type: document.getElementById('modal-type').value,
                 notes: document.getElementById('modal-notes').value.trim() || undefined,
+                photos: (Array.isArray(modalPhotoList) ? modalPhotoList.map(p => (typeof p === 'string' ? p : p.src)).filter(Boolean) : []),
                 link: document.getElementById('modal-gmap').value.trim() || undefined,
                 naver_link: document.getElementById('modal-naver').value.trim() || undefined,
                 hours: document.getElementById('modal-hours').value.trim() || undefined,
                 address_copy: document.getElementById('modal-address').value.trim() || undefined,
                 highlight: document.getElementById('modal-highlight').checked || undefined,
-                bgColor: selectedColor || undefined
+                bgColor: selectedColor || undefined // NEW: 加入背景色
             };
-
-            // 行程照片（可追加）
-            const photoInput = document.getElementById('modal-photos');
-            const files = (photoInput && photoInput.files) ? Array.from(photoInput.files) : [];
-            const saveBtn = document.getElementById('modal-save-btn');
-
-            let appendedPhotos = [];
-            try {
-                if (files.length > 0) {
-                    if (saveBtn) {
-                        saveBtn.disabled = true;
-                        saveBtn.dataset.prevText = saveBtn.textContent;
-                        saveBtn.textContent = '儲存中…';
-                    }
-                    appendedPhotos = (await Promise.all(files.map(f => compressImageCustom(f, 900, 0.82))))
-                        .filter(Boolean);
-                }
-            } catch (err) {
-                console.error(err);
-                alertModal('照片處理失敗，請改用較小的照片或稍後再試。');
-            } finally {
-                if (saveBtn) {
-                    saveBtn.disabled = false;
-                    if (saveBtn.dataset.prevText) saveBtn.textContent = saveBtn.dataset.prevText;
-                }
-            }
-
-            const existingPhotosFromData = (itemIndex !== null
-                && tripData?.itinerary?.[dayIndex]?.items?.[itemIndex]
-                && Array.isArray(tripData.itinerary[dayIndex].items[itemIndex].photos))
-                ? tripData.itinerary[dayIndex].items[itemIndex].photos
-                : [];
-
-            // 若使用者在 modal 預覽中刪除照片（×），會反映在 __itineraryEditingPhotos
-            const basePhotos = (itemIndex !== null && Array.isArray(window.__itineraryEditingPhotos))
-                ? window.__itineraryEditingPhotos
-                : existingPhotosFromData;
-
-            const mergedPhotos = basePhotos.concat(appendedPhotos);
-            if (mergedPhotos.length > 0) newItem.photos = mergedPhotos;
-
+            
             // 清除 undefined 或空字串的屬性
             Object.keys(newItem).forEach(key => newItem[key] === undefined || newItem[key] === '' ? delete newItem[key] : {});
-
+            
             // 深度複製 tripData
             const updatedTripData = JSON.parse(JSON.stringify(tripData));
 
@@ -1163,17 +885,11 @@ async function startCloudSync() {
             }
 
             setTripData(updatedTripData);
-
-            // 收起 modal
             document.getElementById('itinerary-modal').classList.add('hidden');
-            if (photoInput) photoInput.value = '';
-            const photoPreview = document.getElementById('modal-photo-preview');
-            if (photoPreview) photoPreview.innerHTML = '';
-
-            // 重新渲染
-            renderItineraryTab(document.getElementById('app-content'));
+            modalPhotoList = [];
+            // 必須傳入當前容器，以便重新渲染
+            renderItineraryTab(document.getElementById('app-content')); 
         }
-
 
         function deleteItineraryItem(dayIndex, itemIndex) {
             if (!confirm('您確定要刪除此行程項目嗎？此動作無法復原。')) return;
@@ -1188,6 +904,198 @@ async function startCloudSync() {
             // 必須傳入當前容器，以便重新渲染
             renderItineraryTab(document.getElementById('app-content')); 
         }
+
+        // ===============================
+        // Itinerary Photos: add / reorder / delete + lightbox
+        // ===============================
+        let modalPhotoList = [];
+        let _itineraryPhotoInputBound = false;
+
+        function _newPhotoId() {
+            try { return crypto.randomUUID(); } catch (e) { return 'p_' + Date.now() + '_' + Math.random().toString(16).slice(2); }
+        }
+
+        function renderModalPhotoManager() {
+            const wrap = document.getElementById('modal-photo-manager');
+            if (!wrap) return;
+
+            if (!Array.isArray(modalPhotoList) || modalPhotoList.length === 0) {
+                wrap.innerHTML = `<p class="text-xs text-gray-500 col-span-4">尚未上傳照片</p>`;
+                return;
+            }
+
+            wrap.innerHTML = modalPhotoList.map((p, idx) => {
+                const src = (typeof p === 'string') ? p : p?.src;
+                const canUp = idx > 0;
+                const canDown = idx < modalPhotoList.length - 1;
+                return `
+                    <div class="relative" draggable="true"
+                         ondragstart="onModalPhotoDragStart(event, ${idx})"
+                         ondragover="onModalPhotoDragOver(event)"
+                         ondrop="onModalPhotoDrop(event, ${idx})">
+                        <button type="button" class="block w-full" onclick="openModalPhotoPreview(${idx})" title="點擊預覽">
+                            <img src="${src}" class="w-full aspect-square object-cover rounded-lg border shadow-sm" style="border-color: var(--color-divider);" />
+                        </button>
+                        <div class="absolute top-1 left-1 flex gap-1">
+                            <button type="button" class="muji-btn-light text-[11px] px-2 py-1" style="border-color: var(--color-divider);" ${canUp ? '' : 'disabled'} onclick="moveModalPhoto(${idx}, -1)" title="往前">
+                                ↑
+                            </button>
+                            <button type="button" class="muji-btn-light text-[11px] px-2 py-1" style="border-color: var(--color-divider);" ${canDown ? '' : 'disabled'} onclick="moveModalPhoto(${idx}, 1)" title="往後">
+                                ↓
+                            </button>
+                        </div>
+                        <button type="button" class="absolute top-1 right-1 muji-btn-light text-[11px] px-2 py-1" style="border-color: #fca5a5; color:#dc2626;" onclick="deleteModalPhoto(${idx})" title="刪除">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function moveModalPhoto(idx, dir) {
+            const j = idx + dir;
+            if (j < 0 || j >= modalPhotoList.length) return;
+            const arr = modalPhotoList.slice();
+            const tmp = arr[idx];
+            arr[idx] = arr[j];
+            arr[j] = tmp;
+            modalPhotoList = arr;
+            renderModalPhotoManager();
+        }
+
+        function deleteModalPhoto(idx) {
+            if (!confirm('確定刪除此照片？')) return;
+            modalPhotoList.splice(idx, 1);
+            renderModalPhotoManager();
+        }
+
+        let _dragPhotoIndex = null;
+        function onModalPhotoDragStart(e, idx) {
+            _dragPhotoIndex = idx;
+            try { e.dataTransfer.effectAllowed = 'move'; } catch {}
+        }
+        function onModalPhotoDragOver(e) {
+            e.preventDefault();
+            try { e.dataTransfer.dropEffect = 'move'; } catch {}
+        }
+        function onModalPhotoDrop(e, dropIdx) {
+            e.preventDefault();
+            if (_dragPhotoIndex === null || _dragPhotoIndex === dropIdx) return;
+            const arr = modalPhotoList.slice();
+            const [moved] = arr.splice(_dragPhotoIndex, 1);
+            arr.splice(dropIdx, 0, moved);
+            modalPhotoList = arr;
+            _dragPhotoIndex = null;
+            renderModalPhotoManager();
+        }
+
+        // Lightbox state
+        let _lightboxPhotos = [];
+        let _lightboxIndex = 0;
+
+        function _showLightboxAt(idx) {
+            const lb = document.getElementById('photo-lightbox');
+            const img = document.getElementById('photo-lightbox-img');
+            const indicator = document.getElementById('photo-lightbox-indicator');
+            const prevBtn = document.getElementById('photo-lightbox-prev');
+            const nextBtn = document.getElementById('photo-lightbox-next');
+
+            if (!lb || !img) return;
+            _lightboxIndex = Math.max(0, Math.min(idx, _lightboxPhotos.length - 1));
+            img.src = _lightboxPhotos[_lightboxIndex] || '';
+
+            if (indicator) indicator.textContent = _lightboxPhotos.length ? `${_lightboxIndex + 1} / ${_lightboxPhotos.length}` : '';
+            if (prevBtn) prevBtn.style.display = _lightboxPhotos.length > 1 ? '' : 'none';
+            if (nextBtn) nextBtn.style.display = _lightboxPhotos.length > 1 ? '' : 'none';
+        }
+
+        function openPhotoLightbox(dayIndex, itemIndex, photoIndex = 0) {
+            const item = tripData?.itinerary?.[dayIndex]?.items?.[itemIndex];
+            const photos = (item && Array.isArray(item.photos)) ? item.photos : [];
+            if (!photos.length) return;
+
+            _lightboxPhotos = photos.slice();
+            const lb = document.getElementById('photo-lightbox');
+            if (!lb) return;
+            lb.classList.remove('hidden');
+            _showLightboxAt(photoIndex);
+        }
+
+        function openModalPhotoPreview(photoIndex = 0) {
+            const photos = (Array.isArray(modalPhotoList) ? modalPhotoList : []).map(p => (typeof p === 'string') ? p : p?.src).filter(Boolean);
+            if (!photos.length) return;
+
+            _lightboxPhotos = photos;
+            const lb = document.getElementById('photo-lightbox');
+            if (!lb) return;
+            lb.classList.remove('hidden');
+            _showLightboxAt(photoIndex);
+        }
+
+        function closePhotoLightbox() {
+            const lb = document.getElementById('photo-lightbox');
+            if (!lb) return;
+            lb.classList.add('hidden');
+            _lightboxPhotos = [];
+            _lightboxIndex = 0;
+        }
+
+        function _bindLightboxOnce() {
+            const lb = document.getElementById('photo-lightbox');
+            if (!lb) return;
+
+            const backdrop = document.getElementById('photo-lightbox-backdrop');
+            const prevBtn = document.getElementById('photo-lightbox-prev');
+            const nextBtn = document.getElementById('photo-lightbox-next');
+            const closeBtn = document.getElementById('photo-lightbox-close');
+
+            const goPrev = () => _showLightboxAt((_lightboxIndex - 1 + _lightboxPhotos.length) % _lightboxPhotos.length);
+            const goNext = () => _showLightboxAt((_lightboxIndex + 1) % _lightboxPhotos.length);
+
+            if (backdrop) backdrop.addEventListener('click', closePhotoLightbox);
+            if (closeBtn) closeBtn.addEventListener('click', closePhotoLightbox);
+            if (prevBtn) prevBtn.addEventListener('click', () => { if (_lightboxPhotos.length) goPrev(); });
+            if (nextBtn) nextBtn.addEventListener('click', () => { if (_lightboxPhotos.length) goNext(); });
+
+            document.addEventListener('keydown', (e) => {
+                if (lb.classList.contains('hidden')) return;
+                if (e.key === 'Escape') closePhotoLightbox();
+                if (_lightboxPhotos.length > 1) {
+                    if (e.key === 'ArrowLeft') goPrev();
+                    if (e.key === 'ArrowRight') goNext();
+                }
+            });
+        }
+
+        function _bindItineraryPhotoInputOnce() {
+            if (_itineraryPhotoInputBound) return;
+            const input = document.getElementById('modal-photos');
+            if (!input) return;
+
+            input.addEventListener('change', (e) => {
+                const files = Array.from(e.target.files || []);
+                if (!files.length) return;
+
+                const pending = files.length;
+                let done = 0;
+                files.forEach((file) => {
+                    // 复用既有壓縮：輸出為較小 base64，避免 LocalStorage 爆掉
+                    compressImage(file, (dataURL) => {
+                        modalPhotoList.push({ id: _newPhotoId(), src: dataURL });
+                        done += 1;
+                        if (done >= pending) {
+                            // 清空 input，讓同一張照片也能再選一次
+                            input.value = '';
+                            renderModalPhotoManager();
+                        }
+                    });
+                });
+            });
+
+            _itineraryPhotoInputBound = true;
+        }
+
+
         // --- 影像壓縮與 Base64 處理 ---
         function compressImage(file, callback) {
             const reader = new FileReader();
@@ -1217,59 +1125,6 @@ async function startCloudSync() {
             };
             reader.readAsDataURL(file);
         }
-
-        // ===== 圖片檢視（縮圖點擊放大，點背景關閉）=====
-        function openImageViewer(src) {
-            const overlay = document.getElementById('img-viewer');
-            const img = document.getElementById('img-viewer-img');
-            if (!overlay || !img) return;
-            img.src = src || '';
-            overlay.classList.remove('hidden');
-            overlay.classList.add('flex');
-        }
-        function closeImageViewer() {
-            const overlay = document.getElementById('img-viewer');
-            const img = document.getElementById('img-viewer-img');
-            if (!overlay || !img) return;
-            overlay.classList.add('hidden');
-            overlay.classList.remove('flex');
-            img.src = '';
-        }
-
-        // 行程照片壓縮（回傳 dataURL）
-        function compressImageCustom(file, maxWidth = 900, quality = 0.82) {
-            return new Promise((resolve, reject) => {
-                if (!file) return resolve('');
-                const reader = new FileReader();
-                reader.onerror = () => reject(reader.error);
-                reader.onload = (e) => {
-                    const img = new Image();
-                    img.onerror = () => resolve(String(e.target.result || ''));
-                    img.onload = () => {
-                        try {
-                            let w = img.width, h = img.height;
-                            if (w > maxWidth) {
-                                h = Math.round(h * (maxWidth / w));
-                                w = maxWidth;
-                            }
-                            const canvas = document.createElement('canvas');
-                            canvas.width = w;
-                            canvas.height = h;
-                            const ctx = canvas.getContext('2d');
-                            ctx.drawImage(img, 0, 0, w, h);
-                            const dataUrl = canvas.toDataURL('image/jpeg', quality);
-                            resolve(dataUrl);
-                        } catch (err) {
-                            console.error(err);
-                            resolve(String(e.target.result || ''));
-                        }
-                    };
-                    img.src = String(e.target.result || '');
-                };
-                reader.readAsDataURL(file);
-            });
-        }
-
 
         // --- 導航與內容渲染 (不變) ---
         function changeTab(tabName) {
@@ -1363,7 +1218,7 @@ case 'WALLET':
                             </p>
                             <div class="flex items-start justify-between gap-2 acc-wrap">
                                 <p class="text-sm text-gray-600 acc-address flex-1">${acc.address}</p>
-                                <button type="button" onclick="copyTextToClipboard(this.closest('div').querySelector('.acc-address').textContent, '住宿地址已成功複製到剪貼簿！')" class="muji-btn-light text-xs mt-0 px-2 py-1 inline-flex items-center shrink-0 hover:shadow-md">
+                                <button type="button" onclick="copyTextToClipboard(this.closest(\'div\').querySelector(\'.acc-address\').textContent, \'住宿地址已成功複製到剪貼簿！\')" class="muji-btn-light text-xs mt-0 px-2 py-1 inline-flex items-center shrink-0 hover:shadow-md">
                                     <i class="fas fa-copy"></i>
                                 </button>
                              </div>
@@ -1425,10 +1280,7 @@ case 'WALLET':
 
         // --- Tab: ITINERARY (每日行程表) 渲染 (不變) ---
         function renderItineraryTab(container) {
-            // 重建行程圖片 gallery（避免舊 key 殘留）
-            window.__imageGalleryMap = window.__imageGalleryMap || {};
-            Object.keys(window.__imageGalleryMap).forEach(k => { if (k && k.startsWith('it-')) delete window.__imageGalleryMap[k]; });
-
+            
             // 根據日期取得住宿資訊
             function getAccommodation(dateStr) {
                 // 從 "2/13 (五)" 中提取日期數字 (13)
@@ -1464,7 +1316,7 @@ case 'WALLET':
                             </h5>
                             <div class="mt-1 flex items-start justify-between gap-2 stay-wrap">
                              <p class="text-xs text-gray-600 stay-address flex-1">${currentAccommodation.address}</p>
-                             <button type="button" onclick="copyTextToClipboard(this.closest('div').querySelector('.stay-address').textContent, '住宿地址已成功複製到剪貼簿！')" class="muji-btn-light text-[11px] px-2 py-1 inline-flex items-center shrink-0 hover:shadow-md" style="border-color: var(--color-divider);">
+                             <button type="button" onclick="copyTextToClipboard(this.closest(\'div\').querySelector(\'.stay-address\').textContent, \'住宿地址已成功複製到剪貼簿！\')" class="muji-btn-light text-[11px] px-2 py-1 inline-flex items-center shrink-0 hover:shadow-md" style="border-color: var(--color-divider);">
                                  <i class="fas fa-copy"></i>
                              </button>
                          </div>
@@ -1478,7 +1330,7 @@ case 'WALLET':
                         <div class="mb-8 p-3 muji-card">
                             <div class="flex justify-between items-center">
                                 <h4 class="text-lg font-bold text-white p-2 rounded-t-lg mb-4" style="background-color: var(--color-accent);">
-                                    Day${dayIndex+1}：${day.date}
+                                    ${"Day" + (dayIndex + 1) + "：" + day.date}
                                 </h4>
                                 <button onclick="openItineraryItemModal(${dayIndex})" class="muji-btn text-xs px-3 py-1 mb-3">
                                     <i class="fas fa-plus mr-1"></i> 新增項目
@@ -1514,12 +1366,6 @@ case 'WALLET':
                                         </div>
                                     ` : '';
 
-                                    const galleryKey = `it-${dayIndex}-${itemIndex}`;
-                                    if (Array.isArray(item.photos) && item.photos.length) {
-                                        window.__imageGalleryMap = window.__imageGalleryMap || {};
-                                        window.__imageGalleryMap[galleryKey] = item.photos.slice();
-                                    }
-
                                     return `
                                         <div class="timeline-item relative pb-6 ml-3">
                                             <div class="timeline-dot ${dotClass} ${item.highlight ? 'ring-4' : ''}" style="border-color: var(--color-divider); background-color: ${item.highlight ? 'var(--color-text-main)' : 'var(--color-divider)'}; top: 2px; ${item.highlight ? 'box-shadow: 0 0 0 3px var(--color-highlight);' : ''}"></div>
@@ -1539,16 +1385,6 @@ case 'WALLET':
                                                 
                                                 <p class="text-base font-semibold mt-1" style="color: var(--color-text-main);">${item.name}</p>
                                                 <p class="text-xs text-gray-500">${item.notes || item.type}</p>
-
-                                                ${Array.isArray(item.photos) && item.photos.length ? `
-                                                    <div class="mt-3 flex flex-wrap gap-2">
-                                                        ${item.photos.map((src, pi) => `
-                                                            <img src="${src}" class="w-16 h-16 object-cover rounded-lg border cursor-pointer"
-                                                                 style="border-color: var(--color-divider);" data-gallery="it-${dayIndex}-${itemIndex}" data-index="${pi}">
-                                                        `).join('')}
-                                                    </div>
-                                                ` : ''}
-
                                                 
                                                 ${item.hours || item.address_copy ? `
                                                     <div class="mt-2 p-3 rounded-lg border-l-2" style="border-color: var(--color-accent); background-color: var(--color-bg-primary);">
@@ -1567,6 +1403,17 @@ case 'WALLET':
                                                     </div>
                                                 ` : ''}
 
+                                                ${item.photos && item.photos.length ? `
+                                                    <div class="mt-3 flex flex-wrap gap-2">
+                                                        ${item.photos.map((src, pIdx) => `
+                                                            <button type="button" class="group relative" onclick="openPhotoLightbox(${dayIndex}, ${itemIndex}, ${pIdx})" title="點擊放大">
+                                                                <img src="${src}" class="w-16 h-16 object-cover rounded-lg border shadow-sm" style="border-color: var(--color-divider);" />
+                                                                <span class="absolute inset-0 rounded-lg ring-0 group-hover:ring-2 group-hover:ring-black/20"></span>
+                                                            </button>
+                                                        `).join('')}
+                                                    </div>
+                                                ` : ''}
+
                                                 ${itemLink}
                                             </div>
                                         </div>
@@ -1579,7 +1426,6 @@ case 'WALLET':
                 }).join('')}
             `;
             container.innerHTML = html;
-            bindItineraryPhotoClicks(container);
         }
 
         // --- Tab: GUIDE (深度導覽) 渲染 (不變) ---
@@ -1630,8 +1476,6 @@ case 'WALLET':
             // 載入記帳資料
             let expenses = getLocalStorage(expensesKey, []);
 
-
-            const defaultTimeLocal = toDateTimeLocalValue(new Date().toISOString());
             let html = `
                 <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💰 記帳與匯率中心</h2>
 
@@ -1697,12 +1541,6 @@ case 'WALLET':
                     <input type="text" id="expense-item" class="w-full p-2 mb-2 border rounded-lg" placeholder="品項名稱 (e.g. 午餐、咖啡)" style="border-color: var(--color-divider);">
                     <input type="number" id="expense-krw" class="w-full p-2 mb-2 border rounded-lg" placeholder="韓幣金額 (KRW)" style="border-color: var(--color-divider);">
                     
-
-                    <label class="block text-sm font-medium mt-2 mb-2" style="color: var(--color-text-main);">消費時間</label>
-                    <input type="datetime-local" id="expense-time" class="w-full p-2 mb-2 border rounded-lg" style="border-color: var(--color-divider);" value="${defaultTimeLocal}">
-
-                    <input type="text" id="expense-note" class="w-full p-2 mb-2 border rounded-lg" placeholder="備註（可空白）" style="border-color: var(--color-divider);">
-
                     <label class="block text-sm font-medium mb-2" style="color: var(--color-text-main);">上傳或拍照 (壓縮為縮圖)</label>
                     <input type="file" id="expense-photo" accept="image/*" class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold" style="--file-bg: var(--color-accent); --file-text: var(--color-text-main);" onMouseOver="this.style.backgroundColor='var(--color-highlight)'" onMouseOut="this.style.backgroundColor='var(--color-bg-primary)'">
                     <div id="photo-preview" class="mt-2 text-center text-sm text-gray-400">（圖片壓縮後不會佔用太多容量，有照片時不會顯示分類圖示）</div>
@@ -1714,466 +1552,91 @@ case 'WALLET':
                 <div id="expense-list-container">
                     ${expenses.length === 0 ? '<p class="text-center text-gray-500 p-4">目前沒有記帳紀錄。</p>' : ''}
                 </div>
-
-                <div class="muji-card p-4 mb-6">
-                    <h3 class="text-lg font-semibold mb-3" style="color: var(--color-text-main);">📤 匯出總報表</h3>
-                    <div class="grid grid-cols-2 gap-3">
-                        <button id="export-csv-btn" class="muji-btn text-sm">匯出 CSV</button>
-                        <button id="export-pdf-btn" class="muji-btn-light text-sm" style="border-color: var(--color-divider);">匯出 PDF</button>
-                    </div>
-                    <p class="text-xs text-gray-500 mt-2">CSV 可用 Excel 開啟；PDF 會開新視窗並觸發列印（可另存為 PDF）。</p>
-                </div>
-
             `;
             container.innerHTML = html;
-
-            // 匯出報表（CSV/PDF）
-            const csvBtn = document.getElementById('export-csv-btn');
-            if (csvBtn) csvBtn.addEventListener('click', exportReportCSV);
-            const pdfBtn = document.getElementById('export-pdf-btn');
-            if (pdfBtn) pdfBtn.addEventListener('click', exportReportPDF);
             setupWalletListeners();
             renderExpenseList();
         }
 
         // 渲染記帳歷史列表 (更新: 顯示分類圖示和刪除按鈕)
-        
-        // 渲染記帳歷史列表（分日區塊 + 旅程總計 + 依消費時間排序 + 可編輯）
         function renderExpenseList() {
             const container = document.getElementById('expense-list-container');
             let expenses = getLocalStorage(expensesKey, []);
-            if (!container) return;
 
-            if (!Array.isArray(expenses)) expenses = [];
+            if (!container) return;
 
             if (expenses.length === 0) {
                 container.innerHTML = '<p class="text-center text-gray-500 p-4">目前沒有記帳紀錄。</p>';
                 return;
             }
 
-            // 兼容舊資料：沒有 spentAt 的用 createdAt
-            expenses = expenses.map(exp => {
-                if (!exp.spentAt) exp.spentAt = exp.createdAt || exp.timestamp || new Date().toISOString();
-                if (typeof exp.note !== 'string') exp.note = '';
-                return exp;
-            });
-
-            // 依消費時間排序（由早到晚）
-            expenses.sort((a, b) => new Date(a.spentAt).getTime() - new Date(b.spentAt).getTime());
-
-            const totalKRW = expenses.reduce((sum, exp) => sum + (Number(exp.krw) || 0), 0);
+            // 計算總額
+            const totalKRW = expenses.reduce((sum, exp) => sum + exp.krw, 0);
             const totalTWD = krwToTwd(totalKRW);
 
-            // 依日期分組
-            const groups = new Map(); // key: YYYY-MM-DD
-            expenses.forEach(exp => {
-                const d = new Date(exp.spentAt);
-                const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-                if (!groups.has(key)) groups.set(key, []);
-                groups.get(key).push(exp);
-            });
+            let listHtml = `
+                <div class="muji-card p-4 mb-4 text-center" style="background-color: var(--color-highlight); border-color: var(--color-accent);">
+                    <p class="text-lg font-bold" style="color: var(--color-text-main);">總計花費</p>
+                    <p class="text-2xl font-bold my-1" style="color: var(--color-text-main);">${totalKRW.toLocaleString()} KRW</p>
+                    <p class="text-md text-gray-500">約 ${TWD_SYMBOL} ${totalTWD.toLocaleString()} TWD</p>
+                </div>
 
-            const dayKeys = Array.from(groups.keys()).sort((a,b)=>a.localeCompare(b));
-
-            let html = `
-                <div class="muji-card p-4 mb-4" style="border-color: var(--color-divider); background-color: #d7e4f7;">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm font-semibold" style="color: var(--color-text-main);">旅程總計</p>
-                            <p class="text-xs text-gray-600">共 ${expenses.length} 筆</p>
+                <div class="space-y-3">
+                    ${expenses.reverse().map(exp => {
+                        const catInfo = getCategoryInfo(exp.category); // 取得分類資訊
+                        
+                        return `
+                        <div class="muji-card p-3 flex items-center justify-between border" style="border-color: var(--color-divider);">
+                            <div class="flex items-center space-x-3 flex-1 min-w-0">
+                                ${exp.photo ? 
+                                    `<img src="${exp.photo}" alt="收據縮圖" class="w-12 h-12 object-cover rounded-md border" style="border-color: var(--color-divider);">` 
+                                    : 
+                                    `<div class="w-12 h-12 flex items-center justify-center rounded-md text-white text-xl shadow-md" style="background-color: var(--color-text-main);">
+                                        <i class="fas ${catInfo.icon}"></i>
+                                    </div>`
+                                }
+                                <div class="truncate flex-1 min-w-0">
+                                    <p class="font-medium truncate" style="color: var(--color-text-main);">${exp.item}</p>
+                                    <p class="text-xs text-gray-500">${catInfo.name} - ${new Date(exp.timestamp).toLocaleDateString()} ${new Date(exp.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                                </div>
+                            </div>
+                            
+                            <div class="text-right flex flex-col items-end justify-between space-y-1 ml-4">
+                                <p class="text-sm font-semibold whitespace-nowrap" style="color: var(--color-text-main);">${exp.krw.toLocaleString()} KRW</p>
+                                <p class="text-xs text-gray-500 whitespace-nowrap">${TWD_SYMBOL} ${krwToTwd(exp.krw)}</p>
+                                <button onclick="deleteExpense(${exp.id})" class="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded transition duration-150 whitespace-nowrap">
+                                    <i class="fas fa-trash-alt mr-1"></i> 刪除
+                                </button>
+                            </div>
                         </div>
-                        <div class="text-right">
-                            <p class="text-lg font-bold" style="color: var(--color-text-main);">${totalKRW.toLocaleString()} KRW</p>
-                            <p class="text-sm text-gray-600">${TWD_SYMBOL} ${totalTWD.toLocaleString()} TWD</p>
-                        </div>
-                    </div>
+                    `;
+                    }).join('')}
                 </div>
             `;
-
-            dayKeys.forEach(dayKey => {
-                const list = groups.get(dayKey) || [];
-                // 當日總計
-                const dayTotalKRW = list.reduce((sum, exp) => sum + (Number(exp.krw) || 0), 0);
-                const dayTotalTWD = krwToTwd(dayTotalKRW);
-
-                html += `
-                    <div class="muji-card p-4 mb-4" style="border-color: var(--color-divider);">
-                        <div class="flex items-center justify-between rounded-lg p-3 mb-3" style="background-color: #d7e4f7;">
-                            <div>
-                                <p class="text-sm font-semibold" style="color: var(--color-text-main);">📅 ${dayKey}</p>
-                                <p class="text-xs text-gray-600">當日 ${list.length} 筆</p>
-                            </div>
-                            <div class="text-right">
-                                <p class="text-base font-bold" style="color: var(--color-text-main);">${dayTotalKRW.toLocaleString()} KRW</p>
-                                <p class="text-xs text-gray-600">${TWD_SYMBOL} ${dayTotalTWD.toLocaleString()} TWD</p>
-                            </div>
-                        </div>
-
-                        <div class="space-y-3">
-                            ${list.map(exp => {
-                                const catInfo = getCategoryInfo(exp.category);
-                                const d = new Date(exp.spentAt);
-                                const timeText = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                                const noteText = (exp.note || '').trim();
-
-                                return `
-                                <div class="p-3 rounded-lg border" style="border-color: var(--color-divider); background-color: white;">
-                                    <div class="flex items-start justify-between gap-3">
-                                        <div class="flex items-start gap-3 flex-1 min-w-0">
-                                            ${exp.photo
-                                                ? `<img src="${exp.photo}" alt="receipt" class="w-12 h-12 object-cover rounded-md border" style="border-color: var(--color-divider);">`
-                                                : `<div class="w-12 h-12 flex items-center justify-center rounded-md text-white text-xl shadow-md" style="background-color: var(--color-text-main);">
-                                                        <i class="fas ${catInfo.icon}"></i>
-                                                   </div>`
-                                            }
-
-                                            <div class="min-w-0 flex-1">
-                                                <div class="flex items-center gap-2">
-                                                    <p class="font-medium truncate" style="color: var(--color-text-main);">${escapeHTML(exp.item)}</p>
-                                                    <span class="text-[11px] text-gray-500 whitespace-nowrap">⏰ ${timeText}</span>
-                                                </div>
-                                                ${noteText ? `<p class="text-xs text-gray-600 mt-1 break-words">📝 ${escapeHTML(noteText)}</p>` : ``}
-                                            </div>
-                                        </div>
-
-                                        <div class="text-right flex flex-col items-end gap-2">
-                                            <div>
-                                                <p class="text-sm font-semibold" style="color: var(--color-text-main);">${Number(exp.krw).toLocaleString()} KRW</p>
-                                                <p class="text-xs text-gray-500">${TWD_SYMBOL} ${krwToTwd(Number(exp.krw) || 0)}</p>
-                                            </div>
-                                            <div class="flex items-center gap-2">
-                                                <button type="button" onclick="toggleExpenseEdit('${exp.id}', true)" class="text-xs px-2 py-1 rounded border" style="border-color: var(--color-divider);">
-                                                    <i class="fas fa-pen mr-1"></i>編輯
-                                                </button>
-                                                <button type="button" onclick="deleteExpense('${exp.id}')" class="text-xs text-red-600 hover:text-red-800 hover:bg-red-50 px-2 py-1 rounded">
-                                                    <i class="fas fa-trash-alt mr-1"></i>刪除
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <!-- 編輯區（預設隱藏） -->
-                                    <div id="edit-panel-${exp.id}" class="hidden mt-3 pt-3 border-t" style="border-color: var(--color-divider);">
-                                        <div class="grid grid-cols-1 gap-2">
-                                            <label class="text-xs font-medium" style="color: var(--color-text-main);">消費時間</label>
-                                            <input id="edit-time-${exp.id}" type="datetime-local" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);"
-                                                   value="${toDateTimeLocalValue(exp.spentAt)}">
-
-                                            <label class="text-xs font-medium mt-1" style="color: var(--color-text-main);">分類</label>
-                                            <select id="edit-category-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);">
-                                                ${EXPENSE_CATEGORIES.map(cat => `<option value="${cat.key}" ${cat.key===exp.category?'selected':''}>${cat.name}</option>`).join('')}
-                                            </select>
-
-                                            <label class="text-xs font-medium mt-1" style="color: var(--color-text-main);">項目</label>
-                                            <input id="edit-item-${exp.id}" type="text" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);"
-                                                   value="${escapeAttr(exp.item)}">
-
-                                            <label class="text-xs font-medium mt-1" style="color: var(--color-text-main);">金額 (KRW)</label>
-                                            <input id="edit-krw-${exp.id}" type="number" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);"
-                                                   value="${Number(exp.krw) || 0}">
-
-                                            <label class="text-xs font-medium mt-1" style="color: var(--color-text-main);">備註</label>
-                                            <input id="edit-note-${exp.id}" type="text" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);"
-                                                   value="${escapeAttr(exp.note || '')}">
-
-                                            <label class="text-xs font-medium mt-1" style="color: var(--color-text-main);">更換照片（可選）</label>
-                                            <input id="edit-photo-${exp.id}" type="file" accept="image/*" class="w-full text-xs">
-                                        </div>
-
-                                        <div class="flex items-center justify-end gap-2 mt-3">
-                                            <button type="button" onclick="toggleExpenseEdit('${exp.id}', false)" class="muji-btn-light text-xs px-3 py-2" style="border-color: var(--color-divider);">
-                                                取消
-                                            </button>
-                                            <button type="button" onclick="saveExpenseEdit('${exp.id}')" class="muji-btn text-xs px-3 py-2">
-                                                儲存
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                                `;
-                            }).join('')}
-                        </div>
-                    </div>
-                `;
-            });
-
-            container.innerHTML = html;
+            container.innerHTML = listHtml;
         }
+        
+        // NEW: 刪除單筆開銷記錄
+        function deleteExpense(expenseId) {
+            if (!confirm('您確定要刪除這筆開銷紀錄嗎？此動作無法復原。')) {
+                return;
+            }
 
-// ===== 記帳歷史：HTML 安全跳脫 =====
-function escapeHtml(str) {
-    return String(str ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-function escapeAttr(str) {
-    // 用在 value="" / data-* 之類屬性上
-    return escapeHtml(str);
-}
-
-function openImageViewer(src) {
-    // 相容：舊呼叫只傳單張 src
-    if (!src) return;
-    openImageGalleryWithList([String(src)], 0);
-}
-
-// ===== 行程照片：可左右切換的檢視器 =====
-window.__imageGalleryMap = window.__imageGalleryMap || {};
-let __viewerList = [];
-let __viewerIndex = 0;
-
-function openImageGallery(key, index = 0) {
-    const list = (window.__imageGalleryMap && window.__imageGalleryMap[key]) ? window.__imageGalleryMap[key] : [];
-    if (!Array.isArray(list) || !list.length) return;
-    openImageGalleryWithList(list, index);
-}
-
-function openImageGalleryWithList(list, index = 0) {
-    __viewerList = Array.isArray(list) ? list.slice() : [];
-    __viewerIndex = Math.max(0, Math.min(Number(index) || 0, __viewerList.length - 1));
-    const modal = document.getElementById('image-viewer-modal');
-    if (!modal) return;
-    modal.classList.remove('hidden');
-    modal.classList.add('flex');
-    updateImageViewer();
-}
-
-function updateImageViewer() {
-    const modal = document.getElementById('image-viewer-modal');
-    const img = document.getElementById('image-viewer-img');
-    const prevBtn = document.getElementById('image-viewer-prev');
-    const nextBtn = document.getElementById('image-viewer-next');
-    const counter = document.getElementById('image-viewer-counter');
-    if (!modal || !img) return;
-
-    const len = Array.isArray(__viewerList) ? __viewerList.length : 0;
-    if (!len) return;
-
-    img.src = __viewerList[__viewerIndex] || '';
-    const multi = len > 1;
-
-    if (prevBtn) {
-        prevBtn.classList.toggle('hidden', !multi);
-        prevBtn.disabled = !multi;
-        prevBtn.setAttribute('aria-disabled', String(!multi));
-    }
-    if (nextBtn) {
-        nextBtn.classList.toggle('hidden', !multi);
-        nextBtn.disabled = !multi;
-        nextBtn.setAttribute('aria-disabled', String(!multi));
-    }
-    if (counter) {
-        counter.classList.toggle('hidden', !multi);
-        counter.textContent = `${__viewerIndex + 1} / ${len}`;
-    }
-}
-
-function imageViewerPrev() {
-    const len = Array.isArray(__viewerList) ? __viewerList.length : 0;
-    if (len <= 1) return;
-    __viewerIndex = (__viewerIndex - 1 + len) % len; // 迴圈切換
-    updateImageViewer();
-}
-
-function imageViewerNext() {
-    const len = Array.isArray(__viewerList) ? __viewerList.length : 0;
-    if (len <= 1) return;
-    __viewerIndex = (__viewerIndex + 1) % len; // 迴圈切換
-    updateImageViewer();
-}
-
-function closeImageViewer() {
-    const modal = document.getElementById('image-viewer-modal');
-    const img = document.getElementById('image-viewer-img');
-    if (!modal) return;
-    modal.classList.add('hidden');
-    modal.classList.remove('flex');
-    if (img) img.src = '';
-    __viewerList = [];
-    __viewerIndex = 0;
-}
-
-// Close image viewer when clicking on dark background
-document.addEventListener('click', (e) => {
-    const modal = document.getElementById('image-viewer-modal');
-    if (!modal) return;
-    if (modal.classList.contains('hidden')) return;
-    if (e.target === modal) closeImageViewer();
-});
-
-// Keyboard navigation
-document.addEventListener('keydown', (e) => {
-    const modal = document.getElementById('image-viewer-modal');
-    if (!modal || modal.classList.contains('hidden')) return;
-    if (e.key === 'Escape') closeImageViewer();
-    if (e.key === 'ArrowLeft') imageViewerPrev();
-    if (e.key === 'ArrowRight') imageViewerNext();
-});
-
-// 綁定行程縮圖 click（避免 inline onclick 造成字串混亂）
-function bindItineraryPhotoClicks(root) {
-    if (!root) return;
-    const imgs = root.querySelectorAll('img[data-gallery][data-index]');
-    imgs.forEach(img => {
-        if (img.dataset.bound === '1') return;
-        img.dataset.bound = '1';
-        img.addEventListener('click', (ev) => {
-            ev.preventDefault();
-            const key = img.getAttribute('data-gallery') || '';
-            const idx = Number(img.getAttribute('data-index') || 0) || 0;
-            openImageGallery(key, idx);
-        });
-    });
-}
-
-
-async function readFilesAsDataURLs(fileList) {
-    const files = Array.from(fileList || []);
-    const results = [];
-    for (const f of files) {
-        if (!f || !f.type || !f.type.startsWith('image/')) continue;
-        const dataUrl = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result || ''));
-            reader.onerror = () => reject(new Error('read error'));
-            reader.readAsDataURL(f);
-        }).catch(() => '');
-        if (dataUrl) results.push(dataUrl);
-    }
-    return results;
-}
-
-let __itineraryEditingPhotos = [];
-
-function renderModalPhotoPreview() {
-    const box = document.getElementById('modal-photo-preview');
-    if (!box) return;
-    const photos = Array.isArray(__itineraryEditingPhotos) ? __itineraryEditingPhotos : [];
-    if (!photos.length) { box.innerHTML = ''; return; }
-    box.innerHTML = photos.map((src, i) => `
-        <div class="relative">
-            <img src="${escapeAttr(src)}" class="w-16 h-16 object-cover rounded-lg border cursor-pointer" style="border-color: var(--color-divider);" onclick="openImageViewer('${escapeAttr(src)}')">
-            <button type="button" class="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-white border text-xs flex items-center justify-center" style="border-color: var(--color-divider);" onclick="removeModalPhoto(${i})">×</button>
-        </div>
-    `).join('');
-}
-function removeModalPhoto(i) {
-    if (!Array.isArray(__itineraryEditingPhotos)) __itineraryEditingPhotos = [];
-    __itineraryEditingPhotos.splice(i, 1);
-    renderModalPhotoPreview();
-}
-
-
-// 兼容：舊版用 escapeHtml，本頁面模板用 escapeHTML
-function escapeHTML(str){ return escapeHtml(str); }
-
-// 將 ISO 字串轉為 <input type="datetime-local"> 需要的「本地時間」格式：YYYY-MM-DDTHH:mm
-function toDateTimeLocalValue(isoString){
-  try{
-    const d = isoString ? new Date(isoString) : new Date();
-    const tz = d.getTimezoneOffset() * 60000;
-    const local = new Date(d.getTime() - tz);
-    return local.toISOString().slice(0,16);
-  }catch(e){
-    return '';
-  }
-}
-
-
-// ===== 記帳歷史：刪除 / 編輯（inline onclick 會用到）=====
-function deleteExpense(id) {
-    try {
-        const ok = confirm('要刪除這筆紀錄嗎？');
-        if (!ok) return;
-        let expenses = getLocalStorage(expensesKey, []);
-        if (!Array.isArray(expenses)) expenses = [];
-        expenses = expenses.filter(e => String(e.id) !== String(id));
-        setLocalStorage(expensesKey, expenses);
-        renderExpenseList();
-        alertModal('已刪除一筆紀錄。');
-    } catch (err) {
-        console.error(err);
-        alertModal('刪除失敗，請稍後再試。');
-    }
-}
-
-function toggleExpenseEdit(id, show) {
-    const editEl = document.getElementById(`edit-panel-${id}`);
-    if (!editEl) return;
-    if (show) {
-        editEl.classList.remove('hidden');
-        // 讓編輯區更容易被看到
-        try { editEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch(e){}
-    } else {
-        editEl.classList.add('hidden');
-    }
-}
-
-
-function saveExpenseEdit(id) {
-    try {
-        let expenses = getLocalStorage(expensesKey, []);
-        if (!Array.isArray(expenses)) expenses = [];
-        const idx = expenses.findIndex(e => String(e.id) === String(id));
-        if (idx === -1) {
-            alertModal('找不到這筆紀錄，可能已被刪除。');
+            let expenses = getLocalStorage(expensesKey, []);
+            
+            // 過濾掉符合 ID 的項目
+            const updatedExpenses = expenses.filter(exp => exp.id !== expenseId);
+            
+            setLocalStorage(expensesKey, updatedExpenses);
+            
+            alertModal('開銷紀錄已刪除。');
+            
+            // 重新渲染列表
             renderExpenseList();
-            return;
         }
 
-        const itemEl = document.getElementById(`edit-item-${id}`);
-        const timeEl = document.getElementById(`edit-time-${id}`);
-        const catEl  = document.getElementById(`edit-category-${id}`);
-        const krwEl  = document.getElementById(`edit-krw-${id}`);
-        const noteEl = document.getElementById(`edit-note-${id}`);
-        const photoEl= document.getElementById(`edit-photo-${id}`);
 
-        const item = (itemEl ? itemEl.value : '').trim();
-        const krw = parseInt(krwEl ? krwEl.value : '', 10);
-
-        if (!item || isNaN(krw) || krw <= 0) {
-            alertModal('請輸入有效的品項名稱與金額。');
-            return;
-        }
-
-        const spentAt = (timeEl && timeEl.value) ? new Date(timeEl.value).toISOString()
-            : (expenses[idx].spentAt || expenses[idx].timestamp || expenses[idx].createdAt || new Date().toISOString());
-
-        const category = (catEl && catEl.value) ? catEl.value : (expenses[idx].category || (EXPENSE_CATEGORIES[0] ? EXPENSE_CATEGORIES[0].key : 'other'));
-        const note = (noteEl && typeof noteEl.value === 'string') ? noteEl.value.trim() : '';
-
-        const applyUpdate = (photoDataUrl) => {
-            const prev = expenses[idx] || {};
-            expenses[idx] = {
-                ...prev,
-                item,
-                krw,
-                category,
-                note,
-                spentAt,
-                photo: (photoDataUrl !== undefined) ? photoDataUrl : prev.photo
-            };
-            setLocalStorage(expensesKey, expenses);
-            renderExpenseList();
-            alertModal('已儲存修改。');
-        };
-
-        // 若有選新照片，先壓縮再更新；沒有就直接更新
-        const file = photoEl && photoEl.files && photoEl.files[0] ? photoEl.files[0] : null;
-        if (file) {
-            compressImage(file, (dataURL) => applyUpdate(dataURL));
-        } else {
-            applyUpdate(undefined);
-        }
-    } catch (err) {
-        console.error(err);
-        alertModal('儲存失敗，請稍後再試。');
-    }
-}
-
+        // 設置 Wallet Tab 的事件監聽器 (已加入儲存成功提示)
         function setupWalletListeners() {
             // --- 匯率設定 ---
             document.getElementById('set-rate-btn').addEventListener('click', () => {
@@ -2265,19 +1728,12 @@ function saveExpenseEdit(id) {
             document.getElementById('add-expense-btn').addEventListener('click', () => {
                 const itemInput = document.getElementById('expense-item');
                 const krwInput = document.getElementById('expense-krw');
-                
-            const timeInput = document.getElementById('expense-time');
-            const noteInput = document.getElementById('expense-note');
-            if (timeInput && !timeInput.value) { timeInput.value = toDateTimeLocalValue(new Date().toISOString()); }
-const categoryInput = document.getElementById('expense-category'); // NEW
+                const categoryInput = document.getElementById('expense-category'); // NEW
 
                 const item = itemInput.value.trim();
                 // 使用 parseInt 確保是整數
                 const krw = parseInt(krwInput.value, 10);
                 const category = categoryInput.value; // NEW
-
-                const spentAt = (timeInput && timeInput.value) ? new Date(timeInput.value).toISOString() : new Date().toISOString();
-                const note = (noteInput && noteInput.value) ? noteInput.value.trim() : '';
 
                 if (!item || isNaN(krw) || krw <= 0) {
                     alertModal("請輸入有效的品項名稱和韓幣金額。");
@@ -2288,12 +1744,9 @@ const categoryInput = document.getElementById('expense-category'); // NEW
                     id: Date.now(),
                     item: item,
                     krw: krw,
-                    category: category,
-                    note: note,
+                    category: category, // NEW: 儲存分類
                     photo: base64Photo,
-                    spentAt: spentAt,
-                    createdAt: new Date().toISOString(),
-                    timestamp: new Date().toISOString() // 兼容舊匯出/排序
+                    timestamp: new Date().toISOString()
                 };
 
                 // 核心儲存步驟
@@ -2304,10 +1757,7 @@ const categoryInput = document.getElementById('expense-category'); // NEW
                 // 清空表單
                 itemInput.value = '';
                 krwInput.value = '';
-                
-                if (noteInput) noteInput.value = '';
-                if (timeInput) timeInput.value = toDateTimeLocalValue(new Date().toISOString());
-if (categoryInput && Array.isArray(EXPENSE_CATEGORIES) && EXPENSE_CATEGORIES[0]) categoryInput.value = EXPENSE_CATEGORIES[0].key; // 重設分類
+                categoryInput.value = EXPENSE_CATEGORIES[0].key; // 重設分類
                 photoInput.value = null; // 清空檔案輸入
                 document.getElementById('photo-preview').innerHTML = '（圖片壓縮後不會佔用太多容量，有照片時不會顯示分類圖示）';
                 base64Photo = null;
@@ -2358,7 +1808,7 @@ if (categoryInput && Array.isArray(EXPENSE_CATEGORIES) && EXPENSE_CATEGORIES[0])
 
                 <div class="muji-card p-4">
                     <h3 class="text-lg font-semibold mb-3 border-b pb-2" style="color: var(--color-text-main); border-color: var(--color-divider);">個人備忘錄</h3>
-                    <textarea id="memo-input" class="w-full p-3 h-40 border rounded-lg focus:ring-1 focus:ring-red-300 text-sm" placeholder="輸入您的備忘內容..." style="border-color: var(--color-divider); color: var(--color-text-main);">${memoText}</textarea>
+                    <textarea id="memo-input" class="w-full p-3 border rounded-lg focus:ring-1 focus:ring-red-300 text-sm" rows="5" placeholder="想記什麼都可以…（支援貼連結，下面會自動轉預覽）" style="border-color: var(--color-divider); color: var(--color-text-main);">${memoText}</textarea>
                     <button id="save-memo-btn" class="muji-btn w-full mt-3">儲存備忘錄</button>
                     <div class="mt-4 p-3 rounded-lg" id="memo-output" style="background-color: var(--color-bg-primary);">
                         <h4 class="font-medium mb-2" style="color: var(--color-text-main);">連結預覽 (自動轉換)</h4>
@@ -2597,7 +2047,7 @@ if (categoryInput && Array.isArray(EXPENSE_CATEGORIES) && EXPENSE_CATEGORIES[0])
              const infoMemoText = getLocalStorage(memoInfoKey, "例如：\n1. 旅遊保險單號：PL-1234567\n2. 信用卡客服電話：+886-2-2500-XXXX\n3. 備用聯絡人：小明，手機：tel:+886-912-345-678");
 
             let html = `
-                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💡 資訊&備份</h2>
+                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💡 旅遊實用資訊</h2>
 
                 <div class="muji-card p-4 mb-6">
                     <h3 class="text-lg font-semibold mb-3 border-b pb-2" style="color: var(--color-text-main); border-color: var(--color-divider);">當地資訊連結</h3>
@@ -2644,111 +2094,8 @@ if (categoryInput && Array.isArray(EXPENSE_CATEGORIES) && EXPENSE_CATEGORIES[0])
                         <li><span class="font-medium" style="color: var(--color-text-main);">韓屋住宿：</span>在傳統韓屋內需脫鞋，注意保持安靜，以維護環境。</li>
                     </ul>
                 </div>
-            
-                                                <div class="muji-card p-4 mb-6">
-                                    <h3 class="text-lg font-semibold mb-2 flex items-center" style="color: var(--color-text-main);">
-                                        <i class="fas fa-database mr-2 text-xl" style="color: var(--color-accent);"></i> 備份 / 雲端同步
-                                    </h3>
-                                    <p class="text-xs text-gray-500 mb-3">建議：更新版本、換裝置或清除瀏覽器資料前，先匯出備份。</p>
-
-                                    <div class="mb-3">
-                                        <button id="backup-contents-toggle" type="button"
-                                                class="muji-btn-light text-xs px-3 py-2 w-full"
-                                                style="border-color: var(--color-divider);">
-                                            <i class="fas fa-circle-info mr-2"></i>查看備份內容
-                                        </button>
-
-                                        <div id="backup-contents-panel" class="hidden mt-3 p-3 rounded border"
-                                             style="border-color: var(--color-divider); background-color: var(--color-bg-primary);">
-                                            <div class="text-xs font-semibold mb-2" style="color: var(--color-text-main);">備份會包含：</div>
-                                            <ul class="text-[11px] text-gray-600 list-disc pl-5 space-y-1">
-                                                <li>記帳資料：消費時間、分類、項目、金額、備註、每日/旅程總計等</li>
-                                                <li>匯率相關：匯率設定、匯率紀錄與換算機輸入</li>
-                                                <li>清單/備忘：行前清單勾選、備忘錄內容、資訊頁備註</li>
-                                                <li>行程/住宿/航班等：你在 App 內有編輯或儲存的內容</li>
-                                                <li>當地資訊連結：你新增或修改的連結清單</li>
-                                            </ul>
-                                            <div class="mt-2 text-[11px] text-gray-500">提醒：備份只包含本 App 儲存在瀏覽器裡的資料，不包含你裝置上的外部檔案。</div>
-                                        </div>
-                                    </div>
-
-                                    <div class="grid grid-cols-1 gap-3">
-                                        <button id="export-backup-btn" type="button" class="muji-btn">
-                                            <i class="fas fa-file-export mr-2"></i>匯出備份（JSON）
-                                        </button>
-
-                                        <div class="p-3 rounded border" style="border-color: var(--color-divider); background-color: white;">
-                                            <p class="text-xs font-semibold mb-2" style="color: var(--color-text-main);">匯入備份</p>
-                                            <div class="flex items-center gap-2">
-                                                <input id="import-backup-file" type="file" accept=".json,application/json" class="w-full text-xs">
-                                                <button id="import-backup-btn" type="button"
-                                                        class="muji-btn-light text-xs px-3 py-2"
-                                                        style="border-color: var(--color-divider);">
-                                                    <i class="fas fa-file-import mr-1"></i>匯入
-                                                </button>
-                                            </div>
-                                            <div class="text-[11px] text-gray-500 mt-2">匯入會用備份內容覆蓋本機資料（可再手動上傳到雲端）。</div>
-                                        </div>
-
-                                        <div class="p-3 rounded border" style="border-color: var(--color-divider); background-color: white;">
-                                            <div class="flex items-center justify-between mb-2">
-                                                <p class="text-xs font-semibold" style="color: var(--color-text-main);">雲端同步</p>
-                                                <span id="cloud-sync-status" class="text-[11px] text-gray-500">-</span>
-                                            </div>
-                                            <div class="grid grid-cols-2 gap-2">
-                                                <button id="cloud-pull-btn" type="button" class="muji-btn-light text-xs"
-                                                        style="border-color: var(--color-divider);">
-                                                    <i class="fas fa-cloud-download-alt mr-1"></i>從雲端更新本機
-                                                </button>
-                                                <button id="cloud-push-btn" type="button" class="muji-btn-light text-xs"
-                                                        style="border-color: var(--color-divider);">
-                                                    <i class="fas fa-cloud-upload-alt mr-1"></i>上傳本機到雲端
-                                                </button>
-                                            </div>
-                                            <div class="text-[11px] text-gray-600 mt-2 space-y-1">
-                                                <div>▼「從雲端更新本機」：第一次在新裝置使用，或你覺得本機資料不是最新時使用（先拉雲端開始編輯）。</div>
-                                                <div>▲「上傳本機到雲端」：一般情況下你在本機新增/編輯後，會在「回到前景」或「切頁」時自動同步（包含上傳）。此按鈕用於你想立刻強制推送一次（不等切頁/回前景）。</div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-`;
+            `;
             container.innerHTML = html;
-
-            // 雲端同步/備份按鈕
-            const backupToggleBtn = document.getElementById('backup-contents-toggle');
-            const backupPanel = document.getElementById('backup-contents-panel');
-            if (backupToggleBtn && backupPanel) {
-                backupToggleBtn.addEventListener('click', () => {
-                    const isHidden = backupPanel.classList.contains('hidden');
-                    backupPanel.classList.toggle('hidden');
-                    backupToggleBtn.innerHTML = isHidden
-                        ? '<i class="fas fa-chevron-up mr-2"></i>收合備份內容'
-                        : '<i class="fas fa-circle-info mr-2"></i>查看備份內容';
-                });
-            }
-
-            const cloudPullBtn = document.getElementById('cloud-pull-btn');
-            if (cloudPullBtn) cloudPullBtn.addEventListener('click', async () => { await pullFromCloud(true); setTimeout(updateCloudStatusLabel, 300); });
-
-            const cloudPushBtn = document.getElementById('cloud-push-btn');
-            if (cloudPushBtn) cloudPushBtn.addEventListener('click', async () => { await pushToCloud(true); setTimeout(updateCloudStatusLabel, 300); });
-
-            const exportBackupBtn = document.getElementById('export-backup-btn');
-            if (exportBackupBtn) exportBackupBtn.addEventListener('click', exportLocalBackupJSON);
-
-            const importBackupBtn = document.getElementById('import-backup-btn');
-            const importBackupFile = document.getElementById('import-backup-file');
-            if (importBackupBtn && importBackupFile) {
-                importBackupBtn.addEventListener('click', () => {
-                    const f = importBackupFile.files && importBackupFile.files[0];
-                    if (!f) { alertModal('請先選擇備份檔（.json）。'); return; }
-                    importLocalBackupJSON(f);
-                    importBackupFile.value = '';
-                });
-            }
-
-            updateCloudStatusLabel();
             setupInfoListeners();
         }
         
@@ -2792,6 +2139,8 @@ if (categoryInput && Array.isArray(EXPENSE_CATEGORIES) && EXPENSE_CATEGORIES[0])
         document.addEventListener('DOMContentLoaded', () => {
             loadInitialData(); // 加載匯率和行程資料
             loadTitle(); // NEW: 加載並顯示標題
+            // 綁定行程照片 lightbox / 上傳（只綁一次）
+            try { _bindLightboxOnce(); _bindItineraryPhotoInputOnce(); } catch (e) {}
             
             // 初始載入 FLIGHTS_STAY tab (新的首頁)
             changeTab('FLIGHTS_STAY');
@@ -2831,317 +2180,39 @@ if (categoryInput && Array.isArray(EXPENSE_CATEGORIES) && EXPENSE_CATEGORIES[0])
                 document.getElementById('modal-cancel-btn').addEventListener('click', () => {
                     itineraryModal.classList.add('hidden');
                 });
-                // 行程照片：選檔即顯示縮圖（不限制數量）
-                const modalPhotoInput = document.getElementById('modal-photos');
-                if (modalPhotoInput) {
-                    modalPhotoInput.addEventListener('change', () => {
-                        const preview = document.getElementById('modal-photo-preview');
-                        if (!preview) return;
-
-                        // 移除前一次選檔的暫時縮圖（保留既有照片縮圖）
-                        preview.querySelectorAll('img[data-temp="1"]').forEach(img => img.remove());
-
-                        const files = Array.from(modalPhotoInput.files || []);
-                        files.forEach(file => {
-                            const url = URL.createObjectURL(file);
-                            const img = document.createElement('img');
-                            img.src = url;
-                            img.setAttribute('data-temp', '1');
-                            img.className = 'w-16 h-16 object-cover rounded-lg border cursor-pointer';
-                            img.style.borderColor = 'var(--color-divider)';
-                            img.addEventListener('click', () => openImageViewer(img.src));
-                            img.onload = () => URL.revokeObjectURL(url);
-                            preview.appendChild(img);
-                        });
-                    });
-                }
-
             }
         });
 
-    
-
-
-
-            // 圖片檢視：點黑色背景關閉（點圖片不關閉）
-            const viewer = document.getElementById('img-viewer');
-            const viewerImg = document.getElementById('img-viewer-img');
-            if (viewer) {
-                viewer.addEventListener('click', (e) => {
-                    if (e.target === viewer) closeImageViewer();
-                });
-            }
-            if (viewerImg) {
-                viewerImg.addEventListener('click', (e) => e.stopPropagation());
-            }
-// ===============================
-// Cloud status label (for Info tab)
-// ===============================
-function updateCloudStatusLabel() {
-  const el = document.getElementById('cloud-sync-status');
-  if (!el) return;
-
-  try {
-    const unlocked = (typeof window.__isAppUnlocked === 'function') ? window.__isAppUnlocked() : true;
-    if (!unlocked) { el.textContent = '未解鎖'; return; }
-    if (typeof supabaseClient === 'undefined' || !supabaseClient) { el.textContent = '未連線'; return; }
-    if (typeof cloudSyncInFlight !== 'undefined' && cloudSyncInFlight) { el.textContent = '同步中…'; return; }
-
-    const last = (typeof cloudSyncLastAt !== 'undefined' && cloudSyncLastAt) ? new Date(cloudSyncLastAt) : null;
-    if (last && !isNaN(last.getTime())) {
-      el.textContent = '上次同步 ' + _formatDateTimeLocal(last.toISOString(), last.toISOString());
-    } else {
-      el.textContent = '已連線';
-    }
-  } catch (e) {
-    el.textContent = '—';
-  }
-}
-
-// ===============================
-// Wallet export helpers (CSV / PDF)
-// ===============================
-function _pad2(n){ return String(n).padStart(2,'0'); }
-
-function _formatDateTimeLocal(spentAtIso, fallbackIso){
-  const iso = spentAtIso || fallbackIso;
-  if(!iso) return '';
-  try{
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return String(iso);
-    const y = d.getFullYear();
-    const m = _pad2(d.getMonth()+1);
-    const day = _pad2(d.getDate());
-    const hh = _pad2(d.getHours());
-    const mm = _pad2(d.getMinutes());
-    return `${y}-${m}-${day} ${hh}:${mm}`;
-  }catch(e){
-    return String(iso||'');
-  }
-}
-
-function _escapeCsvCell(v){
-  const s = (v===null||v===undefined) ? '' : String(v);
-  const needs = /[",\n\r]/.test(s);
-  const out = s.replace(/"/g,'""');
-  return needs ? `"${out}"` : out;
-}
-
-function _downloadTextFile(filename, text, mime="text/plain;charset=utf-8"){
-  try{
-    const blob = new Blob([text], {type:mime});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url), 500);
-  }catch(err){
-    console.error(err);
-    alertModal("匯出失敗，請稍後再試。");
-  }
-}
-
-function exportReportCSV(){
-  try{
-    const expenses = getLocalStorage(expensesKey, []);
-    const rate = Number(getLocalStorage(exchangeRateKey, currentRate)) || currentRate;
-
-    const catMap = {};
-    (EXPENSE_CATEGORIES || []).forEach(c => { catMap[c.key] = c.name; });
-
-    const header = ["消費時間","品項","分類","金額(KRW)","匯率(KRW/TWD)","金額(TWD)","有照片"];
-    const rows = [header];
-
-    const sorted = [...expenses].sort((a,b)=>{
-      const sa = _formatDateTimeLocal((a.spentAt||a.timestamp||a.createdAt), (a.spentAt||a.timestamp||a.createdAt));
-      const sb = _formatDateTimeLocal((b.spentAt||b.timestamp||b.createdAt), (b.spentAt||b.timestamp||b.createdAt));
-      if (sa < sb) return -1;
-      if (sa > sb) return 1;
-      return (Number(a.id)||0) - (Number(b.id)||0);
-    });
-
-    sorted.forEach(exp=>{
-      const krw = Number(exp.krw) || 0;
-      const twd = Math.round(krwToTwd(krw) * 100) / 100;
-      rows.push([
-        _formatDateTimeLocal((exp.spentAt||exp.timestamp||exp.createdAt), (exp.spentAt||exp.timestamp||exp.createdAt)),
-        exp.item || '',
-        catMap[exp.category] || exp.category || '其他',
-        Math.round(krw),
-        rate,
-        twd,
-        exp.photo ? 'Y' : 'N'
-      ]);
-    });
-
-    const csv = rows.map(r => r.map(_escapeCsvCell).join(',')).join('\n');
-    const now = new Date();
-    const filename = `${APP_ID}_report_${now.getFullYear()}${_pad2(now.getMonth()+1)}${_pad2(now.getDate())}_${_pad2(now.getHours())}${_pad2(now.getMinutes())}.csv`;
-    _downloadTextFile(filename, csv, "text/csv;charset=utf-8");
-    alertModal("已匯出 CSV（可用 Excel 開啟）。");
-  }catch(err){
-    console.error(err);
-    alertModal("匯出 CSV 失敗，請稍後再試。");
-  }
-}
-
-function exportReportPDF(){
-  try{
-    const expenses = getLocalStorage(expensesKey, []);
-    const rate = Number(getLocalStorage(exchangeRateKey, currentRate)) || currentRate;
-
-    const catMap = {};
-    (EXPENSE_CATEGORIES || []).forEach(c => { catMap[c.key] = c.name; });
-
-    const sorted = [...expenses].sort((a,b)=>{
-      const sa = _formatDateTimeLocal((a.spentAt||a.timestamp||a.createdAt), (a.spentAt||a.timestamp||a.createdAt));
-      const sb = _formatDateTimeLocal((b.spentAt||b.timestamp||b.createdAt), (b.spentAt||b.timestamp||b.createdAt));
-      if (sa < sb) return -1;
-      if (sa > sb) return 1;
-      return (Number(a.id)||0) - (Number(b.id)||0);
-    });
-
-    const totalKRW = sorted.reduce((s,e)=>s+(Number(e.krw)||0),0);
-    const totalTWD = Math.round(krwToTwd(totalKRW) * 100) / 100;
-
-    const rowsHtml = sorted.map(exp=>{
-      const krw = Number(exp.krw) || 0;
-      const twd = Math.round(krwToTwd(krw) * 100) / 100;
-      const dt = _formatDateTimeLocal((exp.spentAt||exp.timestamp||exp.createdAt), (exp.spentAt||exp.timestamp||exp.createdAt));
-      const cat = catMap[exp.category] || exp.category || '其他';
-      const photo = exp.photo ? 'Y' : 'N';
-      return `<tr>
-        <td>${dt}</td>
-        <td>${(exp.item||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>
-        <td>${String(cat).replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>
-        <td style="text-align:right;">${Math.round(krw)}</td>
-        <td style="text-align:right;">${rate}</td>
-        <td style="text-align:right;">${twd}</td>
-        <td style="text-align:center;">${photo}</td>
-      </tr>`;
-    }).join('');
-
-    const now = new Date();
-    const title = "記帳總報表";
-    const subtitle = `匯率(KRW/TWD)：${rate}　｜　總計：${Math.round(totalKRW)} KRW（約 ${totalTWD} TWD）　｜　匯出時間：${now.getFullYear()}-${_pad2(now.getMonth()+1)}-${_pad2(now.getDate())} ${_pad2(now.getHours())}:${_pad2(now.getMinutes())}`;
-
-    const html = `<!doctype html>
-<html><head><meta charset="utf-8" />
-<title>${title}</title>
-<style>
-  body{ font-family: -apple-system, BlinkMacSystemFont, "Noto Sans TC", "Segoe UI", Arial, sans-serif; padding: 18px; }
-  h1{ font-size: 18px; margin: 0 0 6px; }
-  .sub{ font-size: 12px; color: #555; margin: 0 0 12px; }
-  table{ width:100%; border-collapse: collapse; font-size: 12px; }
-  th,td{ border: 1px solid #ddd; padding: 6px 8px; vertical-align: top; }
-  th{ background: #f6f6f6; text-align:left; }
-</style></head>
-<body>
-  <h1>${title}</h1>
-  <div class="sub">${subtitle}</div>
-  <table>
-    <thead>
-      <tr>
-        <th>消費時間</th><th>品項</th><th>分類</th>
-        <th style="text-align:right;">金額(KRW)</th>
-        <th style="text-align:right;">匯率</th>
-        <th style="text-align:right;">金額(TWD)</th>
-        <th style="text-align:center;">有照片</th>
-      </tr>
-    </thead>
-    <tbody>${rowsHtml || '<tr><td colspan="7" style="text-align:center;color:#777;">無資料</td></tr>'}</tbody>
-  </table>
-  <script>window.onload = ()=>{ setTimeout(()=>window.print(), 200); };</scr${'ipt>'}
-</body></html>`;
-
-    const win = window.open("", "_blank");
-    if(!win){
-      alertModal("瀏覽器阻擋新視窗，請允許彈出視窗後再匯出 PDF。");
-      return;
-    }
-    win.document.open();
-    win.document.write(html);
-    win.document.close();
-  }catch(err){
-    console.error(err);
-    alertModal("匯出 PDF 失敗，請稍後再試。");
-  }
-}
-
-// ===============================
-// Local backup (JSON) helpers
-// ===============================
-function exportLocalBackupJSON(){
-  try{
-    const snap = buildLocalSnapshot();
-    const payload = {
-      version: 1,
-      appId: APP_ID,
-      exportedAt: new Date().toISOString(),
-      data: snap
-    };
-    const now = new Date();
-    const filename = `${APP_ID}_backup_${now.getFullYear()}${_pad2(now.getMonth()+1)}${_pad2(now.getDate())}_${_pad2(now.getHours())}${_pad2(now.getMinutes())}.json`;
-    _downloadTextFile(filename, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
-    alertModal("已匯出備份檔（JSON）。");
-  }catch(err){
-    console.error(err);
-    alertModal("匯出備份失敗，請稍後再試。");
-  }
-}
-
-function importLocalBackupJSON(file){
-  if(!file) return;
-  const reader = new FileReader();
-  reader.onload = function(){
-    try{
-      const txt = String(reader.result||'');
-      const obj = JSON.parse(txt);
-      const data = obj && obj.data ? obj.data : obj;
-      if(!data || typeof data !== 'object'){
-        alertModal("備份檔格式不正確。");
-        return;
-      }
-      const keys = (typeof SYNC_KEYS !== 'undefined' && Array.isArray(SYNC_KEYS)) ? SYNC_KEYS : [];
-      keys.forEach(k=>{
-        if(Object.prototype.hasOwnProperty.call(data, k)){
-          localStorage.setItem(k, data[k]);
-        }
-      });
-
-      const active = document.querySelector('.nav-item.active');
-      const tab = active ? active.getAttribute('data-tab') : 'FLIGHTS_STAY';
-      if (typeof changeTab === 'function') changeTab(tab);
-      alertModal("已匯入備份並套用。");
-    }catch(err){
-      console.error(err);
-      alertModal("匯入失敗：備份檔可能已損壞或格式不支援。");
-    }
-  };
-  reader.readAsText(file);
-}
-</script>
+    </script>
 
   </div>
 
-    <!-- Image Viewer Modal (for itinerary photos) -->
-    <div id="image-viewer-modal" class="fixed inset-0 z-[70] hidden items-center justify-center bg-black bg-opacity-80 p-4">
-        <button id="image-viewer-prev" type="button" onclick="imageViewerPrev()" class="hidden absolute left-3 sm:left-6 top-1/2 -translate-y-1/2 w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-white/80 hover:bg-white flex items-center justify-center shadow-lg select-none" aria-label="上一張">
-            <span class="text-2xl leading-none">‹</span>
-        </button>
+    <!-- Photo Lightbox -->
+    <div id="photo-lightbox" class="fixed inset-0 z-[60] hidden">
+        <div id="photo-lightbox-backdrop" class="absolute inset-0 bg-black/80"></div>
+        <div class="absolute inset-0 flex items-center justify-center p-4">
+            <div class="relative flex items-center justify-center">
+                <img id="photo-lightbox-img" src="" alt="preview" class="max-w-[90vw] max-h-[80vh] w-auto h-auto rounded-xl shadow-2xl border border-white/10 bg-white" />
 
-        <img id="image-viewer-img" alt="preview" class="max-w-full max-h-full rounded-2xl shadow-lg">
+                <button id="photo-lightbox-prev" type="button"
+                        class="absolute -left-3 sm:-left-14 top-1/2 -translate-y-1/2 px-3 py-2 rounded-full text-white border border-white/30 bg-black/20 hover:bg-black/40">
+                    <i class="fas fa-chevron-left"></i>
+                </button>
 
-        <button id="image-viewer-next" type="button" onclick="imageViewerNext()" class="hidden absolute right-3 sm:right-6 top-1/2 -translate-y-1/2 w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-white/80 hover:bg-white flex items-center justify-center shadow-lg select-none" aria-label="下一張">
-            <span class="text-2xl leading-none">›</span>
-        </button>
+                <button id="photo-lightbox-next" type="button"
+                        class="absolute -right-3 sm:-right-14 top-1/2 -translate-y-1/2 px-3 py-2 rounded-full text-white border border-white/30 bg-black/20 hover:bg-black/40">
+                    <i class="fas fa-chevron-right"></i>
+                </button>
 
-        <div id="image-viewer-counter" class="hidden absolute top-4 right-4 text-xs px-3 py-1 rounded-full bg-white/80 shadow">
-            1 / 1
+                <button id="photo-lightbox-close" type="button"
+                        class="absolute -top-3 -right-3 sm:-top-10 sm:-right-10 px-3 py-2 rounded-full text-white border border-white/30 bg-black/20 hover:bg-black/40">
+                    <i class="fas fa-times"></i>
+                </button>
+
+                <div id="photo-lightbox-indicator" class="absolute -bottom-8 left-1/2 -translate-x-1/2 text-white text-sm opacity-90"></div>
+            </div>
         </div>
     </div>
+
 </body>
 </html>
