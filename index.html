@@ -2047,7 +2047,79 @@ case 'WALLET':
              const infoMemoText = getLocalStorage(memoInfoKey, "例如：\n1. 旅遊保險單號：PL-1234567\n2. 信用卡客服電話：+886-2-2500-XXXX\n3. 備用聯絡人：小明，手機：tel:+886-912-345-678");
 
             let html = `
-                <h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💡 旅遊實用資訊</h2>
+                                <h2 class="text-2xl font-bold mb-4 border-b-2 pb-2" style="border-color: var(--color-divider);">備份 / 雲端同步</h2>
+
+                <div class="muji-card p-4 mb-6">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="flex items-center gap-2">
+                            <div class="w-10 h-10 rounded-xl flex items-center justify-center" style="background-color: var(--color-bg-primary);">
+                                <i class="fas fa-database"></i>
+                            </div>
+                            <div>
+                                <div class="text-xl font-bold" style="color: var(--color-text-main);">備份 / 雲端同步</div>
+                                <div class="text-sm text-gray-600 mt-1">建議：更新版本、換裝置或清除瀏覽器資料前，先匯出備份。</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <details id="backup-details" class="mt-4" open>
+                        <summary id="backup-summary" class="cursor-pointer select-none border-2 rounded-xl px-4 py-3 flex items-center justify-between font-semibold" style="border-color: var(--color-text-main); color: var(--color-text-main);">
+                            <span id="backup-summary-text">收合備份內容</span>
+                            <i id="backup-summary-icon" class="fas fa-chevron-up"></i>
+                        </summary>
+
+                        <div class="mt-3 p-4 rounded-xl border" style="border-color: var(--color-divider); background-color: var(--color-bg-primary);">
+                            <div class="font-semibold mb-2" style="color: var(--color-text-main);">備份會包含：</div>
+                            <ul class="text-sm space-y-2 list-disc list-inside text-gray-700">
+                                <li>記帳資料：消費時間、項目、分類、金額、照片、備註、記帳歷史等</li>
+                                <li>匯率相關：匯率設定、匯率紀錄與換算機輸入</li>
+                                <li>清單/備忘：行前清單勾選、備忘錄內容、資訊頁備註</li>
+                                <li>行程/住宿/航班等：你在 App 內有編輯或儲存的內容</li>
+                                <li>當地資訊連結：你新增或修改的連結清單</li>
+                            </ul>
+                            <div class="text-xs text-gray-600 mt-3">提醒：備份只包含本 App 儲存在瀏覽器裡的資料，不包含你裝置上的外部檔案。</div>
+                        </div>
+                    </details>
+
+                    <button id="export-backup-json-btn" class="muji-btn w-full flex items-center justify-center gap-2 mt-4 py-3 text-lg">
+                        <i class="fas fa-file-export"></i>
+                        匯出備份（JSON）
+                    </button>
+
+                    <div class="mt-4 p-4 rounded-xl border" style="border-color: var(--color-divider);">
+                        <div class="text-lg font-semibold mb-3" style="color: var(--color-text-main);">匯入備份</div>
+                        <div class="flex items-center justify-between gap-3">
+                            <input id="import-backup-file" type="file" accept="application/json" class="block w-full text-sm text-gray-700" />
+                            <button id="import-backup-run-btn" class="muji-btn-light px-4 py-2" style="border-color: var(--color-divider);">
+                                <i class="fas fa-file-import mr-2"></i>匯入
+                            </button>
+                        </div>
+                        <div class="text-sm text-gray-600 mt-2">匯入會以備份內容覆蓋本機資料（可再手動上傳到雲端）。</div>
+                    </div>
+
+                    <div class="mt-6 p-4 rounded-xl border" style="border-color: var(--color-divider);">
+                        <div class="flex items-center justify-between">
+                            <div class="text-lg font-semibold" style="color: var(--color-text-main);">雲端同步</div>
+                            <span id="cloud-sync-pill" class="text-xs font-semibold px-3 py-1 rounded-full" style="background-color: var(--color-bg-primary); color: var(--color-text-main); border: 1px solid var(--color-divider);">—</span>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3 mt-4">
+                            <button id="cloud-pull-btn" class="muji-btn-light text-sm py-2" style="border-color: var(--color-divider);">
+                                <i class="fas fa-cloud-download-alt mr-2"></i>從雲端更新本機
+                            </button>
+                            <button id="cloud-push-btn" class="muji-btn text-sm py-2">
+                                <i class="fas fa-cloud-upload-alt mr-2"></i>上傳本機到雲端
+                            </button>
+                        </div>
+
+                        <div class="text-sm text-gray-700 mt-3 space-y-2">
+                            <div><span class="font-semibold" style="color: var(--color-text-main);">「從雲端更新本機」：</span>第一次在新裝置使用、或你覺得本機資料不是最新時使用（先拉雲端再開始編輯）。</div>
+                            <div><span class="font-semibold" style="color: var(--color-text-main);">「上傳本機到雲端」：</span>一般情況下，你在本機新增/編輯後會自動同步（包含上傳）。此按鈕用於你想立刻強制推送一次（不等切頁/回前景）。</div>
+                        </div>
+                    </div>
+                </div>
+
+<h2 class="text-2xl font-bold mb-6 border-b-2 border-dashed pb-2" style="border-color: var(--color-divider);">💡 旅遊實用資訊</h2>
 
                 <div class="muji-card p-4 mb-6">
                     <h3 class="text-lg font-semibold mb-3 border-b pb-2" style="color: var(--color-text-main); border-color: var(--color-divider);">當地資訊連結</h3>
@@ -2096,19 +2168,83 @@ case 'WALLET':
                 </div>
             `;
             container.innerHTML = html;
-            setupInfoListeners();
+            setupInfoListeners(infoMemoText);
         }
         
         // NEW: 設置 Info Tab 的事件監聽器
-        function setupInfoListeners() {  
-            renderMemoOutput(infoMemoText, 'memo-info-output', '<i class="fas fa-shield-halved mr-2"></i>'); // 使用盾牌圖示作為備註連結前綴
+        function setupInfoListeners(infoMemoText) {  
+            try {
+                renderMemoOutput(infoMemoText, 'memo-info-output', '<i class="fas fa-shield-halved mr-2"></i>');
+            } catch (e) {}
 
-            document.getElementById('save-memo-info-btn').addEventListener('click', () => {
-                const input = document.getElementById('memo-info-input');
-                const newMemoText = input.value;
-                setLocalStorage(memoInfoKey, newMemoText);
-                renderMemoOutput(newMemoText, 'memo-info-output', '<i class="fas fa-shield-halved mr-2"></i>');
-                alertModal("備註已儲存。");
+            const saveBtn = document.getElementById('save-memo-info-btn');
+            if (saveBtn) {
+                saveBtn.addEventListener('click', () => {
+                    const input = document.getElementById('memo-info-input');
+                    const newMemoText = input ? input.value : '';
+                    setLocalStorage(memoInfoKey, newMemoText);
+                    renderMemoOutput(newMemoText, 'memo-info-output', '<i class="fas fa-shield-halved mr-2"></i>');
+                    alertModal("備註已儲存。");
+                });
+            }
+
+            // ===== 備份 / 匯入 =====
+            const details = document.getElementById('backup-details');
+            const sumText = document.getElementById('backup-summary-text');
+            const sumIcon = document.getElementById('backup-summary-icon');
+            function syncSummary() {
+                if (!details || !sumText || !sumIcon) return;
+                if (details.open) {
+                    sumText.textContent = '收合備份內容';
+                    sumIcon.classList.remove('fa-chevron-down');
+                    sumIcon.classList.add('fa-chevron-up');
+                } else {
+                    sumText.textContent = '展開備份內容';
+                    sumIcon.classList.remove('fa-chevron-up');
+                    sumIcon.classList.add('fa-chevron-down');
+                }
+            }
+            if (details) {
+                details.addEventListener('toggle', syncSummary);
+                syncSummary();
+            }
+
+            const exportBtn = document.getElementById('export-backup-json-btn');
+            if (exportBtn) exportBtn.addEventListener('click', exportLocalBackupJSON);
+
+            const importBtn = document.getElementById('import-backup-run-btn');
+            const importFile = document.getElementById('import-backup-file');
+            if (importBtn && importFile) {
+                importBtn.addEventListener('click', () => {
+                    const f = importFile.files && importFile.files[0];
+                    if (!f) { alertModal("請先選擇備份檔（JSON）。"); return; }
+                    importLocalBackupJSON(f);
+                });
+            }
+
+            // ===== 雲端同步 =====
+            const pill = document.getElementById('cloud-sync-pill');
+            const pullBtn = document.getElementById('cloud-pull-btn');
+            const pushBtn = document.getElementById('cloud-push-btn');
+
+            const enabled = (typeof ENABLE_CLOUD_SYNC !== 'undefined') ? !!ENABLE_CLOUD_SYNC : false;
+            if (pill) {
+                pill.textContent = enabled ? '啟用中' : '未啟用';
+            }
+            if (!enabled) {
+                if (pullBtn) pullBtn.disabled = true;
+                if (pushBtn) pushBtn.disabled = true;
+                if (pullBtn) pullBtn.classList.add('opacity-50');
+                if (pushBtn) pushBtn.classList.add('opacity-50');
+            }
+
+            if (pullBtn) pullBtn.addEventListener('click', async () => {
+                if (!enabled) { alertModal("雲端同步尚未啟用。"); return; }
+                try { await pullFromCloud(true); changeTab('INFO'); alertModal("已從雲端更新本機。"); } catch (e) { console.error(e); alertModal("從雲端更新失敗，請稍後再試。"); }
+            });
+            if (pushBtn) pushBtn.addEventListener('click', async () => {
+                if (!enabled) { alertModal("雲端同步尚未啟用。"); return; }
+                try { await pushToCloud(); alertModal("已上傳到雲端。"); } catch (e) { console.error(e); alertModal("上傳到雲端失敗，請稍後再試。"); }
             });
         }
 
@@ -2183,7 +2319,76 @@ case 'WALLET':
             }
         });
 
-    </script>
+    
+
+// ===============================
+// Backup (JSON) helpers
+// ===============================
+function _pad2(n){ return String(n).padStart(2,'0'); }
+
+function _downloadTextFile(filename, text, mime="text/plain;charset=utf-8"){
+  const blob = new Blob([text], {type:mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 500);
+}
+
+function exportLocalBackupJSON(){
+  try{
+    const snap = buildLocalSnapshot();
+    const payload = {
+      version: 1,
+      appId: APP_ID,
+      exportedAt: new Date().toISOString(),
+      data: snap
+    };
+    const now = new Date();
+    const filename = `${APP_ID}_backup_${now.getFullYear()}${_pad2(now.getMonth()+1)}${_pad2(now.getDate())}_${_pad2(now.getHours())}${_pad2(now.getMinutes())}.json`;
+    _downloadTextFile(filename, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+    alertModal("已匯出備份（JSON）。");
+  }catch(err){
+    console.error(err);
+    alertModal("匯出備份失敗，請稍後再試。");
+  }
+}
+
+function importLocalBackupJSON(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(){
+    try{
+      const txt = String(reader.result||'');
+      const obj = JSON.parse(txt);
+      const data = (obj && obj.data) ? obj.data : obj;
+
+      if(!data || typeof data !== 'object'){
+        alertModal("備份檔格式不正確。");
+        return;
+      }
+
+      const ok = confirm("匯入會覆蓋本機資料，確定要繼續嗎？");
+      if (!ok) return;
+
+      // 套用到本機（僅寫入 SYNC_KEYS 內的鍵）
+      applyRemoteSnapshot(data);
+
+      // 重新渲染一次，確保介面更新
+      try { changeTab('INFO'); } catch (e) {}
+      alertModal("已匯入備份並套用。");
+    }catch(err){
+      console.error(err);
+      alertModal("匯入失敗：備份檔可能已損壞或格式不支援。");
+    }
+  };
+  reader.readAsText(file);
+}
+
+</script>
 
   </div>
 
