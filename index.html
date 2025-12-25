@@ -790,6 +790,55 @@ function startCloudSync() {
             setLocalStorage(tripDataKey, data);
         }
 
+
+        // --- 行程時間排序：輸入 24 小時制（如 08:30、10:00-12:00、10:00–12:00）時，自動依時間排序 ---
+        function _parseTimeToMinutes(timeStr) {
+            if (!timeStr) return null;
+            const s = String(timeStr).trim();
+
+            // 允許：HH:MM / H:MM / HH：MM（全形冒號）
+            // 也允許：HH:MM-...、HH:MM–...、HH:MM~...、HH:MM 到 ...
+            const m = s.match(/^\s*(\d{1,2})\s*[:：]\s*(\d{2})(?:\s*(?:[-~–—到]\s*\d{1,2}\s*[:：]\s*\d{2})?.*)?$/);
+            if (!m) return null;
+
+            const hh = parseInt(m[1], 10);
+            const mm = parseInt(m[2], 10);
+            if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+            if (hh < 0 || hh > 23) return null;
+            if (mm < 0 || mm > 59) return null;
+
+            return hh * 60 + mm;
+        }
+
+        function _sortItemsByTime(items) {
+            if (!Array.isArray(items)) return items;
+
+            const decorated = items.map((it, idx) => {
+                const minutes = _parseTimeToMinutes(it && it.time);
+                return { it, idx, minutes };
+            });
+
+            decorated.sort((a, b) => {
+                const aHas = a.minutes !== null;
+                const bHas = b.minutes !== null;
+
+                // 有可解析時間的排前面
+                if (aHas && !bHas) return -1;
+                if (!aHas && bHas) return 1;
+
+                // 兩者皆有時間：依時間排序（同時間維持原順序）
+                if (aHas && bHas) {
+                    if (a.minutes !== b.minutes) return a.minutes - b.minutes;
+                    return a.idx - b.idx;
+                }
+
+                // 兩者皆無可解析時間：維持原順序
+                return a.idx - b.idx;
+            });
+
+            return decorated.map(d => d.it);
+        }
+
         // --- 行程編輯/新增/刪除功能 (不變) ---
         function openItineraryItemModal(dayIndex, itemIndex = null) {
             const modal = document.getElementById('itinerary-modal');
@@ -884,7 +933,11 @@ function startCloudSync() {
                 alertModal('新的行程項目已加入！');
             }
 
-            setTripData(updatedTripData);
+
+             // 自動依 24 小時制時間排序（可解析的時間會排在前面；無法解析者保留原順序置後）
+             updatedTripData.itinerary[dayIndex].items = _sortItemsByTime(updatedTripData.itinerary[dayIndex].items);
+
+             setTripData(updatedTripData);
             document.getElementById('itinerary-modal').classList.add('hidden');
             modalPhotoList = [];
             // 必須傳入當前容器，以便重新渲染
@@ -899,7 +952,11 @@ function startCloudSync() {
             
             updatedTripData.itinerary[dayIndex].items.splice(itemIndex, 1);
 
-            setTripData(updatedTripData);
+
+             // 刪除後也維持時間排序
+             updatedTripData.itinerary[dayIndex].items = _sortItemsByTime(updatedTripData.itinerary[dayIndex].items);
+
+             setTripData(updatedTripData);
             alertModal('行程項目已刪除。');
             // 必須傳入當前容器，以便重新渲染
             renderItineraryTab(document.getElementById('app-content')); 
