@@ -251,6 +251,14 @@
                 <input type="hidden" id="modal-day-index">
                 <input type="hidden" id="modal-item-index">
 
+                 <!-- NEW: 行程日期選擇（依選擇日期自動放入對應 Day） -->
+                 <div>
+                     <label for="modal-date" class="block text-sm font-medium" style="color: var(--color-text-main);">日期</label>
+                     <input type="date" id="modal-date" required class="w-full p-2 border rounded-lg" style="border-color: var(--color-divider);">
+                     <p class="text-xs text-gray-500 mt-1">選擇日期後，儲存會自動放到該日期的行程欄位。</p>
+                 </div>
+
+
                 <div>
                     <label for="modal-name" class="block text-sm font-medium" style="color: var(--color-text-main);">項目名稱</label>
                     <input type="text" id="modal-name" required class="w-full p-2 border rounded-lg" placeholder="e.g. 北村大瓦房醬蟹" style="border-color: var(--color-divider);">
@@ -839,7 +847,67 @@ function startCloudSync() {
             return decorated.map(d => d.it);
         }
 
-        // --- 行程編輯/新增/刪除功能 (不變) ---
+        // --- 行程編輯/新增/刪除功能（加入日期選擇：依日期放到對應 Day） ---
+        const ITINERARY_DEFAULT_YEAR = 2026;
+
+        function _pad2(n){ return String(n).padStart(2,'0'); }
+
+        function _extractMDFromLabel(label){
+            const m = String(label||'').match(/(\d{1,2})\/(\d{1,2})/);
+            if (!m) return null;
+            return { month: parseInt(m[1],10), day: parseInt(m[2],10) };
+        }
+
+        function _dayLabelToISO(label){
+            const md = _extractMDFromLabel(label);
+            if (!md) return '';
+            return `${ITINERARY_DEFAULT_YEAR}-${_pad2(md.month)}-${_pad2(md.day)}`;
+        }
+
+        function _weekdayZhFromISO(iso){
+            if (!iso) return '';
+            const d = new Date(iso + 'T00:00:00');
+            const map = ['日','一','二','三','四','五','六'];
+            return map[d.getDay()] || '';
+        }
+
+        function _dayLabelFromISO(iso){
+            const d = new Date(iso + 'T00:00:00');
+            if (isNaN(d.getTime())) return '';
+            const m = d.getMonth() + 1;
+            const day = d.getDate();
+            const w = _weekdayZhFromISO(iso);
+            return `${m}/${day} (${w})`;
+        }
+
+        function _findDayIndexByISO(td, iso){
+            if (!td || !Array.isArray(td.itinerary)) return -1;
+            return td.itinerary.findIndex(day => _dayLabelToISO(day.date) === iso);
+        }
+
+        function _insertDayInOrder(td, iso){
+            const label = _dayLabelFromISO(iso) || iso;
+            const newDay = { date: label, items: [] };
+            if (!Array.isArray(td.itinerary)) td.itinerary = [];
+            // 找到應插入的位置（依 ISO 日期排序；無法解析者視為最後）
+            let insertAt = td.itinerary.length;
+            for (let i=0;i<td.itinerary.length;i++){
+                const otherISO = _dayLabelToISO(td.itinerary[i].date);
+                if (otherISO && otherISO > iso){
+                    insertAt = i;
+                    break;
+                }
+            }
+            td.itinerary.splice(insertAt, 0, newDay);
+            return insertAt;
+        }
+
+        function _ensureDayIndexByISO(td, iso){
+            let idx = _findDayIndexByISO(td, iso);
+            if (idx !== -1) return idx;
+            return _insertDayInOrder(td, iso);
+        }
+
         function openItineraryItemModal(dayIndex, itemIndex = null) {
             const modal = document.getElementById('itinerary-modal');
             const form = document.getElementById('itinerary-form');
@@ -855,6 +923,20 @@ function startCloudSync() {
             document.getElementById('modal-photos').value = '';
             document.getElementById('modal-day-index').value = dayIndex;
             document.getElementById('modal-item-index').value = itemIndex !== null ? itemIndex : '';
+
+            // NEW: 初始化日期選擇
+            const dateInput = document.getElementById('modal-date');
+            if (dateInput) {
+                const firstISO = _dayLabelToISO(tripData.itinerary?.[0]?.date);
+                const lastISO = _dayLabelToISO(tripData.itinerary?.[tripData.itinerary.length - 1]?.date);
+                if (firstISO) dateInput.min = firstISO;
+                if (lastISO) dateInput.max = lastISO;
+
+                // 預設帶入目前 dayIndex 對應日期；編輯/新增都一致
+                const defaultISO = _dayLabelToISO(tripData.itinerary?.[dayIndex]?.date);
+                if (defaultISO) dateInput.value = defaultISO;
+            }
+
             
             // 重設顏色選擇為預設
             document.querySelector(`input[name="modal-bgColor"][value=""]`).checked = true;
@@ -923,21 +1005,57 @@ function startCloudSync() {
             // 深度複製 tripData
             const updatedTripData = JSON.parse(JSON.stringify(tripData));
 
+            // NEW: 依「日期選擇」決定要放入哪一天
+            const pickedISO = (document.getElementById('modal-date')?.value || '').trim();
+            const originalISO = _dayLabelToISO(tripData.itinerary?.[dayIndex]?.date);
+            const targetISO = pickedISO || originalISO || '';
+
+            // 先確保目標 day 存在（必要時會自動插入新的一天）
+            const targetDayIndex = targetISO ? _ensureDayIndexByISO(updatedTripData, targetISO) : dayIndex;
+
+            // 若因插入新的一天導致原 dayIndex 位移，重新定位來源 dayIndex
+            const fromDayIndex = originalISO ? _findDayIndexByISO(updatedTripData, originalISO) : dayIndex;
+
             if (itemIndex !== null) {
-                // 編輯現有項目
-                updatedTripData.itinerary[dayIndex].items[itemIndex] = newItem;
+                // 編輯現有項目（允許改日期：會自動搬移到新日期）
+                const fromItems = updatedTripData.itinerary?.[fromDayIndex]?.items;
+                if (targetDayIndex === fromDayIndex) {
+                    // 同一天：直接更新
+                    if (Array.isArray(fromItems) && itemIndex >= 0 && itemIndex < fromItems.length) {
+                        fromItems[itemIndex] = newItem;
+                    } else {
+                        // 容錯：找不到原位置就視同新增
+                        updatedTripData.itinerary[targetDayIndex].items = Array.isArray(updatedTripData.itinerary[targetDayIndex].items) ? updatedTripData.itinerary[targetDayIndex].items : [];
+                        updatedTripData.itinerary[targetDayIndex].items.push(newItem);
+                    }
+                } else {
+                    // 跨天：先從原日移除，再加入新日
+                    if (Array.isArray(fromItems) && itemIndex >= 0 && itemIndex < fromItems.length) {
+                        fromItems.splice(itemIndex, 1);
+                    }
+                    updatedTripData.itinerary[targetDayIndex].items = Array.isArray(updatedTripData.itinerary[targetDayIndex].items) ? updatedTripData.itinerary[targetDayIndex].items : [];
+                    updatedTripData.itinerary[targetDayIndex].items.push(newItem);
+
+                    // 來源日也維持時間排序
+                    if (updatedTripData.itinerary[fromDayIndex]) {
+                        updatedTripData.itinerary[fromDayIndex].items = _sortItemsByTime(updatedTripData.itinerary[fromDayIndex].items || []);
+                    }
+                }
+
                 alertModal('行程項目已更新！');
             } else {
-                // 新增項目 (預設加在當日行程末尾)
-                updatedTripData.itinerary[dayIndex].items.push(newItem);
+                // 新增項目：依選擇日期加入
+                updatedTripData.itinerary[targetDayIndex].items = Array.isArray(updatedTripData.itinerary[targetDayIndex].items) ? updatedTripData.itinerary[targetDayIndex].items : [];
+                updatedTripData.itinerary[targetDayIndex].items.push(newItem);
                 alertModal('新的行程項目已加入！');
             }
 
+            // 目標日維持時間排序
+            if (updatedTripData.itinerary[targetDayIndex]) {
+                updatedTripData.itinerary[targetDayIndex].items = _sortItemsByTime(updatedTripData.itinerary[targetDayIndex].items || []);
+            }
 
-             // 自動依 24 小時制時間排序（可解析的時間會排在前面；無法解析者保留原順序置後）
-             updatedTripData.itinerary[dayIndex].items = _sortItemsByTime(updatedTripData.itinerary[dayIndex].items);
-
-             setTripData(updatedTripData);
+            setTripData(updatedTripData);
             document.getElementById('itinerary-modal').classList.add('hidden');
             modalPhotoList = [];
             // 必須傳入當前容器，以便重新渲染
