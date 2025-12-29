@@ -2429,6 +2429,16 @@ case 'WALLET':
                                 <i class="fas fa-clipboard-check mr-2"></i>自我檢查（行程/照片/容量）
                             </button>
                         </div>
+                        <div class="mt-4">
+                            <button id="migrate-photos-btn" class="w-full px-4 py-2 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 font-semibold hover:bg-amber-100">
+                                ♻️ 批次轉存「舊照片」到雲端（把 data:image 轉成 Storage URL）
+                            </button>
+                            <div id="migrate-photos-status" class="mt-2 text-sm text-gray-600"></div>
+                            <div class="mt-2 text-xs text-gray-500 leading-relaxed">
+                                只會處理「行程表」照片 src 以 <span class="font-mono">data:image</span> 開頭的舊資料；已是 <span class="font-mono">https://</span> URL 的不會重傳。完成後會自動存到本機，並依你的雲端同步設定（開啟時）自動推到 shared_docs。
+                            </div>
+                        </div>
+
 
 </div>
 
@@ -2573,6 +2583,20 @@ case 'WALLET':
                 selfCheckBtn.addEventListener('click', () => {
                     try { runSelfCheck(); } catch (e) { console.error(e); alertModal("自我檢查失敗，請稍後再試。"); }
                 });
+
+            const migrateBtn = document.getElementById('migrate-photos-btn');
+            if (migrateBtn) {
+                migrateBtn.addEventListener('click', async () => {
+                    try {
+                        await migrateItineraryBase64PhotosToStorage();
+                    } catch (e) {
+                        console.error(e);
+                        const statusEl = document.getElementById('migrate-photos-status');
+                        if (statusEl) statusEl.textContent = '⚠️ 轉存過程發生錯誤，請打開 Console 看錯誤訊息。';
+                    }
+                });
+            }
+
             }
         }
 
@@ -2817,6 +2841,109 @@ function _downloadTextFile(filename, text, mime="text/plain;charset=utf-8"){
   a.click();
   a.remove();
   setTimeout(()=>URL.revokeObjectURL(url), 500);
+}
+
+// ===== 批次轉存舊照片（data:image）到 Supabase Storage（一次性工具） =====
+function _isDataImageUrl(v) {
+    return typeof v === 'string' && v.startsWith('data:image');
+}
+async function _dataUrlToBlob(dataUrl) {
+    const res = await fetch(dataUrl);
+    return await res.blob();
+}
+function _guessExtFromMime(mime) {
+    if (!mime) return 'webp';
+    if (mime.includes('png')) return 'png';
+    if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+    if (mime.includes('webp')) return 'webp';
+    return 'bin';
+}
+async function _uploadDataUrlToStorage(dataUrl) {
+    const blob = await _dataUrlToBlob(dataUrl);
+    const ext = _guessExtFromMime(blob.type);
+    const fileName = `${Date.now()}_${Math.random().toString(16).slice(2)}.${ext}`;
+    const file = new File([blob], fileName, { type: blob.type || 'image/webp' });
+    return await uploadPhotoToStorage(file);
+}
+
+async function migrateItineraryBase64PhotosToStorage() {
+    const statusEl = document.getElementById('migrate-photos-status');
+    const btn = document.getElementById('migrate-photos-btn');
+    if (!btn || !statusEl) return;
+
+    if (!canUploadToStorage()) {
+        statusEl.textContent = '⚠️ 目前無法上傳到 Storage：請確認 SUPABASE 設定、bucket / policy、以及網路連線。';
+        return;
+    }
+
+    // 深拷貝，避免中途失敗污染原資料
+    const data = JSON.parse(JSON.stringify(tripData || {}));
+    const itinerary = Array.isArray(data.itinerary) ? data.itinerary : [];
+    let targets = [];
+
+    itinerary.forEach((day, di) => {
+        const items = Array.isArray(day.items) ? day.items : [];
+        items.forEach((it, ii) => {
+            const photos = Array.isArray(it.photos) ? it.photos : [];
+            photos.forEach((p, pi) => {
+                const src = (p && typeof p === 'object') ? p.src : p;
+                if (_isDataImageUrl(src)) {
+                    targets.push({ di, ii, pi });
+                }
+            });
+        });
+    });
+
+    if (targets.length === 0) {
+        statusEl.textContent = '✅ 沒有找到需要轉存的舊照片（行程表內已全部是 Storage URL / 或尚未加入照片）。';
+        return;
+    }
+
+    const ok = confirm(`將把「行程表」內 ${targets.length} 張舊照片轉存到雲端 Storage，並以 URL 取代原本的 data:image。\n\n注意：此動作會修改你的本機資料（可先匯出備份保留）。\n\n要開始嗎？`);
+    if (!ok) return;
+
+    btn.disabled = true;
+    btn.classList.add('opacity-60', 'cursor-not-allowed');
+
+    let success = 0;
+    let fail = 0;
+
+    for (let i = 0; i < targets.length; i++) {
+        const { di, ii, pi } = targets[i];
+        statusEl.textContent = `⏳ 轉存中：${i + 1}/${targets.length} ...（成功 ${success} / 失敗 ${fail}）`;
+
+        try {
+            const it = itinerary[di]?.items?.[ii];
+            if (!it) continue;
+            const p = it.photos?.[pi];
+            const src = (p && typeof p === 'object') ? p.src : p;
+
+            if (!_isDataImageUrl(src)) continue; // 可能途中已被改掉
+
+            const url = await _uploadDataUrlToStorage(src);
+
+            if (p && typeof p === 'object') {
+                p.src = url;
+                // 保留既有 id（或補上）
+                if (!p.id) p.id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+            } else {
+                it.photos[pi] = { id: `${Date.now()}_${Math.random().toString(16).slice(2)}`, src: url };
+            }
+
+            success++;
+        } catch (e) {
+            console.error('migrate photo failed', e);
+            fail++;
+        }
+    }
+
+    // 套回並存檔（這會自動寫入 localStorage，並依設定排程推雲端 shared_docs）
+    data.itinerary = itinerary;
+    setTripData(data);
+
+    statusEl.textContent = `✅ 轉存完成：成功 ${success} / 失敗 ${fail}。若你有開啟雲端同步，請稍等自動推送或手動按「上傳本機到雲端」。`;
+    btn.disabled = false;
+    btn.classList.remove('opacity-60', 'cursor-not-allowed');
 }
 
 function exportLocalBackupJSON(){
