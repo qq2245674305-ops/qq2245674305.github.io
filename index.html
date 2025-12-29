@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>韓國之旅：親友旅遊小工具</title>
@@ -211,8 +214,9 @@
             </span>
         </h1>
 
-        <div id="rate-badge" class="text-sm font-medium px-3 py-1 rounded-full" style="background-color: var(--color-bg-primary); color: var(--color-text-main);">
-            KRW/TWD: -
+        <div id="rate-badge" class="text-sm font-medium px-3 py-1 rounded-full flex items-center" style="background-color: var(--color-bg-primary); color: var(--color-text-main); gap:6px;">
+            <span id="rate-text">KRW/TWD: -</span>
+            <span id="build-tag" class="text-[10px] opacity-70 select-none">v2025-12-27a</span>
         </div>
     </header>
 
@@ -343,6 +347,7 @@
                 <div>
                     <label for="modal-photos" class="block text-sm font-medium" style="color: var(--color-text-main);">照片（可多選、不限數量）</label>
                     <input type="file" id="modal-photos" accept="image/*" multiple class="w-full p-2 border rounded-lg text-sm bg-white" style="border-color: var(--color-divider);">
+                    <div id="photo-upload-status" class="mt-1 text-xs text-gray-600"></div>
                     <p class="text-xs text-gray-500 mt-1">提示：可拖曳縮圖或用「↑ ↓」調整順序；可刪除單張照片。</p>
                     <div id="modal-photo-manager" class="mt-2 grid grid-cols-4 gap-2"></div>
                 </div>
@@ -541,7 +546,7 @@ const SHARED_DOC_ID = "seoul-trip";
 const SYNC_KEYS = [exchangeRateKey, daesagwanRateKey, expensesKey, checklistKey, memoKey, memoInfoKey, tripDataKey, APP_TITLE_KEY];
 
 let supabaseClient = null;
-let cloudAutoSync = true;
+let cloudAutoSync = false; // 手動同步（B方案：不自動上傳/拉取）
 let cloudPushTimer = null;
 let cloudPollTimer = null;
 let cloudLastPushedHash = "";
@@ -601,6 +606,7 @@ function scheduleCloudPush() {
 }
 
 async function pushToCloud() {
+  if (!supabaseClient) supabaseClient = initSupabaseClient();
   if (!supabaseClient) return;
   try {
     const snapshot = buildLocalSnapshot();
@@ -624,6 +630,7 @@ async function pushToCloud() {
 }
 
 async function pullFromCloud(force = false) {
+  if (!supabaseClient) supabaseClient = initSupabaseClient();
   if (!supabaseClient) return;
   try {
     const { data, error } = await supabaseClient
@@ -776,16 +783,17 @@ function startCloudSync() {
 
         function updateRateDisplay() {
   const badge = document.getElementById("rate-badge");
+    const rateText = document.getElementById("rate-text");
   if (!badge) return;
 
   const v = getLocalStorage(exchangeRateKey, 0.024);
   const rate = Number(v);
 
   if (!Number.isFinite(rate)) {
-    badge.textContent = "KRW/TWD: -";
+    if (rateText) rateText.textContent = "KRW/TWD: -"; else badge.textContent = "KRW/TWD: -";
     return;
   }
-  badge.textContent = `KRW/TWD: ${rate.toFixed(3)}`;
+  if (rateText) rateText.textContent = `KRW/TWD: ${rate.toFixed(3)}`; else badge.textContent = `KRW/TWD: ${rate.toFixed(3)}`;
 }
 
         function krwToTwd(krw) {
@@ -1247,32 +1255,162 @@ function startCloudSync() {
             const input = document.getElementById('modal-photos');
             if (!input) return;
 
-            input.addEventListener('change', (e) => {
+            
+            input.addEventListener('change', async (e) => {
                 const files = Array.from(e.target.files || []);
                 if (!files.length) return;
 
-                const pending = files.length;
-                let done = 0;
-                files.forEach((file) => {
-                    // 复用既有壓縮：輸出為較小 base64，避免 LocalStorage 爆掉
-                    compressImage(file, (dataURL) => {
-                        modalPhotoList.push({ id: _newPhotoId(), src: dataURL });
-                        done += 1;
-                        if (done >= pending) {
-                            // 清空 input，讓同一張照片也能再選一次
-                            input.value = '';
-                            renderModalPhotoManager();
+                const statusEl = document.getElementById('photo-upload-status');
+                const supa = initSupabaseClient();
+
+                // 若未啟用雲端/未載入 supabase，退回為本機 base64（舊行為）
+                const canUpload = !!(ENABLE_CLOUD_SYNC && supa && supa.storage);
+
+                input.disabled = true;
+                try {
+                    let i = 0;
+                    for (const file of files) {
+                        i += 1;
+                        if (statusEl) statusEl.textContent = canUpload ? `照片上傳中… ${i}/${files.length}` : `照片處理中… ${i}/${files.length}`;
+
+                        if (canUpload) {
+                            try {
+                                const url = await uploadPhotoToStorage(file, supa);
+                                modalPhotoList.push({ id: _newPhotoId(), src: url });
+                            } catch (err) {
+                                console.error('[PhotoUpload] failed, fallback to base64:', err);
+                                // 上傳失敗時，退回 base64（避免使用者白做工）
+                                await new Promise((resolve) => {
+                                    compressImage(file, (dataURL) => {
+                                        modalPhotoList.push({ id: _newPhotoId(), src: dataURL });
+                                        resolve();
+                                    });
+                                });
+                            }
+                        } else {
+                            await new Promise((resolve) => {
+                                compressImage(file, (dataURL) => {
+                                    modalPhotoList.push({ id: _newPhotoId(), src: dataURL });
+                                    resolve();
+                                });
+                            });
                         }
-                    });
-                });
+                    }
+
+                    // 清空 input，讓同一張照片也能再選一次
+                    input.value = '';
+                    renderModalPhotoManager();
+                } finally {
+                    input.disabled = false;
+                    if (statusEl) statusEl.textContent = '';
+                }
             });
 
             _itineraryPhotoInputBound = true;
+
         }
 
 
         // --- 影像壓縮與 Base64 處理 ---
-        function compressImage(file, callback) {
+        
+        // ===============================
+        // Photo Storage (Supabase Storage)
+        // ===============================
+        // 方案 2：照片上傳到 Supabase Storage，資料只存 URL（建議使用 Public bucket）
+        const PHOTO_BUCKET = "kr-trip-photos"; // 你在 Supabase Storage 建的 bucket 名稱
+        const PHOTO_MAX_WIDTH = 1600;          // 上傳前壓縮寬度（建議 1200~2000）
+        const PHOTO_QUALITY = 0.78;            // 壓縮品質（0~1）
+        const PHOTO_PREFERRED_MIME = "image/webp"; // 會自動 fallback 為 image/jpeg
+
+        function _randToken(len = 12) {
+            const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+            let s = "";
+            for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
+            return s;
+        }
+
+        async function compressImageToBlob(file, opts = {}) {
+            const maxW = opts.maxWidth || PHOTO_MAX_WIDTH;
+            const quality = (typeof opts.quality === "number") ? opts.quality : PHOTO_QUALITY;
+            const preferred = opts.mime || PHOTO_PREFERRED_MIME;
+
+            const dataURL = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(reader.error || new Error("FileReader failed"));
+                reader.readAsDataURL(file);
+            });
+
+            const img = await new Promise((resolve, reject) => {
+                const im = new Image();
+                im.onload = () => resolve(im);
+                im.onerror = () => reject(new Error("Image load failed"));
+                im.src = dataURL;
+            });
+
+            let width = img.width;
+            let height = img.height;
+            if (width > maxW) {
+                height = Math.round(height * (maxW / width));
+                width = maxW;
+            }
+
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0, width, height);
+
+            // 優先 WebP，若瀏覽器不支援則退回 JPEG
+            const tryMimes = [preferred, "image/jpeg"];
+            for (const mime of tryMimes) {
+                const blob = await new Promise((resolve) => canvas.toBlob(resolve, mime, quality));
+                if (blob) {
+                    const ext = (mime === "image/webp") ? "webp" : "jpg";
+                    return { blob, mime, ext, width, height };
+                }
+            }
+
+            // 極少數情況 fallback：用 dataURL 轉 blob
+            const fallbackBlob = await (await fetch(canvas.toDataURL("image/jpeg", quality))).blob();
+            return { blob: fallbackBlob, mime: "image/jpeg", ext: "jpg", width, height };
+        }
+
+        async function uploadPhotoToStorage(file, supaClient) {
+            const supa = supaClient || initSupabaseClient();
+            if (!supa) throw new Error("Supabase not initialized");
+            if (!supa.storage) throw new Error("Supabase storage not available");
+
+            const { blob, mime, ext } = await compressImageToBlob(file);
+
+            const path = `${SHARED_DOC_ID}/${Date.now()}_${_randToken(10)}.${ext}`;
+            const { error } = await supa.storage.from(PHOTO_BUCKET).upload(path, blob, {
+                contentType: mime,
+                upsert: false,
+                cacheControl: "31536000"
+            });
+
+            if (error) {
+                // 若剛好撞名，重試一次
+                if ((error.statusCode === 409) || (String(error.message || "").toLowerCase().includes("duplicate"))) {
+                    const retryPath = `${SHARED_DOC_ID}/${Date.now()}_${_randToken(12)}.${ext}`;
+                    const r = await supa.storage.from(PHOTO_BUCKET).upload(retryPath, blob, {
+                        contentType: mime,
+                        upsert: false,
+                        cacheControl: "31536000"
+                    });
+                    if (r.error) throw r.error;
+                    const { data } = supa.storage.from(PHOTO_BUCKET).getPublicUrl(retryPath);
+                    return data.publicUrl;
+                }
+                throw error;
+            }
+
+            const { data } = supa.storage.from(PHOTO_BUCKET).getPublicUrl(path);
+            return data.publicUrl;
+        }
+
+function compressImage(file, callback) {
             const reader = new FileReader();
             reader.onload = function(event) {
                 const img = new Image();
@@ -2285,11 +2423,18 @@ case 'WALLET':
                             <button id="cloud-push-btn" class="muji-btn text-sm py-2">
                                 <i class="fas fa-cloud-upload-alt mr-2"></i>上傳本機到雲端
                             </button>
+                        
+                        <div class="mt-4">
+                            <button id="self-check-btn" class="muji-btn-light w-full text-sm py-2" style="border-color: var(--color-divider);">
+                                <i class="fas fa-clipboard-check mr-2"></i>自我檢查（行程/照片/容量）
+                            </button>
                         </div>
+
+</div>
 
                         <div class="text-sm text-gray-700 mt-3 space-y-2">
                             <div><span class="font-semibold" style="color: var(--color-text-main);">「從雲端更新本機」：</span>第一次在新裝置使用、或你覺得本機資料不是最新時使用（先拉雲端再開始編輯）。</div>
-                            <div><span class="font-semibold" style="color: var(--color-text-main);">「上傳本機到雲端」：</span>一般情況下，你在本機新增/編輯後會自動同步（包含上傳）。此按鈕用於你想立刻強制推送一次（不等切頁/回前景）。</div>
+                            <div><span class="font-semibold" style="color: var(--color-text-main);">「上傳本機到雲端」：</span>本機新增/編輯後不會自動上傳。完成編輯後，請按此按鈕把本機資料推送到雲端，讓其他裝置可用「從雲端更新本機」取得最新內容。</div>
                         </div>
                     </div>
                 </div>
@@ -2421,6 +2566,14 @@ case 'WALLET':
                 if (!enabled) { alertModal("雲端同步尚未啟用。"); return; }
                 try { await pushToCloud(); alertModal("已上傳到雲端。"); } catch (e) { console.error(e); alertModal("上傳到雲端失敗，請稍後再試。"); }
             });
+
+            // ===== 自我檢查 =====
+            const selfCheckBtn = document.getElementById('self-check-btn');
+            if (selfCheckBtn) {
+                selfCheckBtn.addEventListener('click', () => {
+                    try { runSelfCheck(); } catch (e) { console.error(e); alertModal("自我檢查失敗，請稍後再試。"); }
+                });
+            }
         }
 
 
@@ -2444,6 +2597,159 @@ case 'WALLET':
             }
             document.getElementById('alert-message').textContent = message;
             modal.classList.remove('hidden');
+        }
+
+
+        // --- Custom HTML Modal (for diagnostics) ---
+        function showHtmlModal(title, html) {
+            let modal = document.getElementById('custom-html-modal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'custom-html-modal';
+                modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-30 p-4 hidden';
+                modal.innerHTML = `
+                    <div class="muji-card p-5 w-full max-w-lg" style="border-color: var(--color-divider); max-height: 85vh; overflow:auto;">
+                        <div class="flex items-center justify-between gap-3 mb-3">
+                            <div class="text-lg font-bold" id="html-modal-title" style="color: var(--color-text-main);"></div>
+                            <button id="html-modal-close-x" class="muji-btn-light px-3 py-1 text-sm" style="border-color: var(--color-divider);">關閉</button>
+                        </div>
+                        <div id="html-modal-body" class="text-sm text-gray-700 space-y-2"></div>
+                        <div class="mt-4 grid grid-cols-2 gap-3">
+                            <button id="html-modal-copy-btn" class="muji-btn-light text-sm py-2" style="border-color: var(--color-divider);">
+                                <i class="fas fa-copy mr-2"></i>複製報告
+                            </button>
+                            <button id="html-modal-close-btn" class="muji-btn text-sm py-2">確認</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+
+                const hide = () => modal.classList.add('hidden');
+                document.getElementById('html-modal-close-btn').onclick = hide;
+                document.getElementById('html-modal-close-x').onclick = hide;
+
+                document.getElementById('html-modal-copy-btn').onclick = () => {
+                    try {
+                        const txt = (document.getElementById('html-modal-body')?.innerText || '').trim();
+                        copyTextToClipboard(txt, '已複製自我檢查報告');
+                    } catch (e) {
+                        alertModal('複製失敗，請手動複製。');
+                    }
+                };
+
+                // click backdrop to close
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) hide();
+                });
+            }
+            document.getElementById('html-modal-title').textContent = title || '自我檢查';
+            document.getElementById('html-modal-body').innerHTML = html || '';
+            modal.classList.remove('hidden');
+        }
+
+        // --- Self Check: itinerary/photos/storage size ---
+        function runSelfCheck() {
+            const encoder = (typeof TextEncoder !== 'undefined') ? new TextEncoder() : null;
+            const byteLen = (str) => {
+                try {
+                    if (encoder) return encoder.encode(String(str)).length;
+                    return unescape(encodeURIComponent(String(str))).length;
+                } catch (e) {
+                    return String(str).length;
+                }
+            };
+
+            const fmtBytes = (b) => {
+                const n = Number(b) || 0;
+                const kb = 1024, mb = kb * 1024;
+                if (n >= mb) return (n / mb).toFixed(2) + ' MB';
+                if (n >= kb) return (n / kb).toFixed(1) + ' KB';
+                return n + ' B';
+            };
+
+            // 1) Itinerary stats
+            const td = getLocalStorage(tripDataKey, initialTripData) || {};
+            const days = Array.isArray(td.itinerary) ? td.itinerary : [];
+            let itemCount = 0, itemsWithPhotos = 0, photoCount = 0;
+
+            days.forEach(d => {
+                const items = Array.isArray(d?.items) ? d.items : [];
+                itemCount += items.length;
+                items.forEach(it => {
+                    const photos = Array.isArray(it?.photos) ? it.photos : [];
+                    if (photos.length) itemsWithPhotos += 1;
+                    photoCount += photos.length;
+                });
+            });
+
+            // 2) Storage usage (only this APP keys)
+            const prefix = String(APP_ID || '').trim();
+            const keySizes = [];
+            let totalBytes = 0;
+
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (!k) continue;
+                if (prefix && !k.startsWith(prefix)) continue;
+                const v = localStorage.getItem(k) || '';
+                const b = byteLen(v);
+                keySizes.push({ k, b });
+                totalBytes += b;
+            }
+            keySizes.sort((a, b) => b.b - a.b);
+
+            // 3) TripData bytes estimate
+            let tripDataBytes = 0;
+            try {
+                const s = JSON.stringify(td || {});
+                tripDataBytes = byteLen(s);
+            } catch (e) {}
+
+            // 4) Heuristic quota warning (browser dependent; commonly ~5MB per origin)
+            const QUOTA = 5 * 1024 * 1024;
+            const warn = totalBytes > (QUOTA * 0.9);
+            const critical = totalBytes > (QUOTA * 0.98);
+
+            const enabled = (typeof ENABLE_CLOUD_SYNC !== 'undefined') ? !!ENABLE_CLOUD_SYNC : false;
+
+            const top = keySizes.slice(0, 5).map(x => `<li><span class="font-mono">${x.k}</span>：${fmtBytes(x.b)}</li>`).join('');
+            const statusBadge = critical
+                ? `<span class="font-semibold text-red-600">接近上限</span>`
+                : (warn ? `<span class="font-semibold text-orange-600">偏高</span>` : `<span class="font-semibold text-green-700">正常</span>`);
+
+            const html = `
+                <div class="p-3 rounded-xl border" style="border-color: var(--color-divider); background-color: var(--color-bg-primary);">
+                    <div class="font-semibold mb-2" style="color: var(--color-text-main);">行程資料</div>
+                    <ul class="list-disc list-inside space-y-1">
+                        <li>天數：<b>${days.length}</b></li>
+                        <li>項目筆數：<b>${itemCount}</b></li>
+                        <li>含照片的項目：<b>${itemsWithPhotos}</b>（照片總數 <b>${photoCount}</b>）</li>
+                    </ul>
+                </div>
+
+                <div class="p-3 rounded-xl border mt-3" style="border-color: var(--color-divider); background-color: var(--color-bg-primary);">
+                    <div class="font-semibold mb-2" style="color: var(--color-text-main);">本機儲存空間（估算）</div>
+                    <ul class="list-disc list-inside space-y-1">
+                        <li>本 App localStorage 使用量：<b>${fmtBytes(totalBytes)}</b> / 約 5 MB（各瀏覽器略有差異） → ${statusBadge}</li>
+                        <li>其中「TRIP_DATA」估算大小：<b>${fmtBytes(tripDataBytes)}</b></li>
+                        <li>雲端同步狀態：<b>${enabled ? '啟用中' : '未啟用'}</b></li>
+                    </ul>
+                    ${warn ? `<div class="text-sm mt-2 ${critical ? 'text-red-600' : 'text-orange-600'}">
+                        建議：照片會讓容量暴增。若接近上限，請先匯出備份（JSON），並減少照片數量或改用外部連結（Google 相簿/雲端連結）。
+                    </div>` : ``}
+                </div>
+
+                <div class="p-3 rounded-xl border mt-3" style="border-color: var(--color-divider); background-color: var(--color-bg-primary);">
+                    <div class="font-semibold mb-2" style="color: var(--color-text-main);">占用最多的 Key（前 5 名）</div>
+                    <ol class="list-decimal list-inside space-y-1">${top || '<li>（無）</li>'}</ol>
+                </div>
+
+                <div class="text-xs text-gray-600 mt-3">
+                    這份報告是依目前瀏覽器的 localStorage 估算；如果你是用「檔案(file://)」開啟與「網址(https://...)」開啟，兩者是不同來源，資料不會互通。
+                </div>
+            `;
+
+            showHtmlModal('自我檢查報告', html);
         }
 
         // --- 初始化與事件綁定 ---
@@ -2593,6 +2899,422 @@ function importLocalBackupJSON(file){
             </div>
         </div>
     </div>
+
+
+<!-- Embedded backup JSON (auto-seed on first load) -->
+<script id="KR_TRIP_APP_EMBEDDED_BACKUP" type="application/json">
+{
+  "version": 1,
+  "appId": "KR_TRIP_APP",
+  "exportedAt": "2025-12-28T14:10:27.345Z",
+  "data": {
+    "KR_TRIP_APP_EXCHANGE_RATE": 0.02,
+    "KR_TRIP_APP_EXPENSES": [],
+    "KR_TRIP_APP_CHECKLIST": {
+      "todo": [
+        {
+          "id": 101,
+          "text": "換韓幣",
+          "notes": "目標換 100 萬 KRW",
+          "checked": false
+        },
+        {
+          "id": 102,
+          "text": "線上辦理 K-ETA/Q-CODE",
+          "notes": "出發前 72 小時內完成",
+          "checked": false
+        },
+        {
+          "id": 103,
+          "text": "信用卡開通國外交易",
+          "notes": "",
+          "checked": false
+        },
+        {
+          "id": 104,
+          "text": "訂購機場接送服務",
+          "notes": "確認車型與人數",
+          "checked": false
+        }
+      ],
+      "luggage": [
+        {
+          "id": 1,
+          "text": "護照",
+          "notes": "確認效期大於六個月",
+          "checked": false
+        },
+        {
+          "id": 2,
+          "text": "esim (或實體 SIM 卡)",
+          "notes": "出發前開通",
+          "checked": false
+        },
+        {
+          "id": 3,
+          "text": "台幣 (用於換韓幣)",
+          "notes": "換錢所只收大鈔",
+          "checked": false
+        },
+        {
+          "id": 4,
+          "text": "羽絨外套",
+          "notes": "",
+          "checked": false
+        },
+        {
+          "id": 5,
+          "text": "貼身保暖衣物 (發熱衣)",
+          "notes": "",
+          "checked": false
+        },
+        {
+          "id": 6,
+          "text": "帽子, 手套",
+          "notes": "韓國冬天必備",
+          "checked": false
+        },
+        {
+          "id": 7,
+          "text": "旅遊常備藥 (感冒、腸胃藥)",
+          "notes": "",
+          "checked": false
+        },
+        {
+          "id": 8,
+          "text": "保健食品",
+          "notes": "",
+          "checked": false
+        },
+        {
+          "id": 9,
+          "text": "個人盥洗用品",
+          "notes": "",
+          "checked": false
+        },
+        {
+          "id": 10,
+          "text": "化妝品, 保養品, 卸妝",
+          "notes": "",
+          "checked": false
+        },
+        {
+          "id": 11,
+          "text": "凡士林, 唇膏, 身體乳 (韓國較乾燥)",
+          "notes": "",
+          "checked": false
+        }
+      ]
+    },
+    "KR_TRIP_APP_MEMO": "北村導覽:https://tchinese.visitseoul.net/walking-tour/%E5%8C%97%E6%9D%91%E9%9F%93%E5%B1%8B%E6%9D%91%E8%B7%AF%E7%B7%9A/TCN000622",
+    "KR_TRIP_APP_MEMO_INFO": "電子入境申報:https://www.e-arrivalcard.go.kr/portal/main/index.do?locale=CH&fbclid=IwY2xjawO93lxleHRuA2FlbQIxMABicmlkETFZVkI3SmlEUUMxYkdPTE5xc3J0YwZhcHBfaWQQMjIyMDM5MTc4ODIwMDg5MgABHg8lDZ2px6zxiBJAvbNF_kdswmCOQCSu0ydQVoTATb7j5_uCsX6Q8IzM3wwX_aem_KnpK8rkL7sIQ1yW4qEc0PA\n 出發前 72 小時內,(有 SES，就不用填電子入境卡,走自動通關)",
+    "KR_TRIP_APP_TRIP_DATA": {
+      "flights": "去程：2026/2/13 華航CI164 高雄-仁川 (07:10 - 10:55)；回程：2026/2/21 華航CI165 仁川-高雄 (12:00 - 14:10)",
+      "itinerary": [
+        {
+          "date": "2/13 (五)",
+          "items": [
+            {
+              "name": "抵達仁川",
+              "time": "中午前",
+              "type": "Travel",
+              "notes": "CI164 預計 10:55 抵達，直接搭車前往市區",
+              "highlight": true
+            },
+            {
+              "link": "https://maps.app.goo.gl/cnKvroKdRau3itxz5",
+              "name": "큰기와집(大瓦房醬蟹-北村)",
+              "time": "中午",
+              "type": "Food",
+              "hours": "每日 12:00–21:00 (平日休息 15:00–17:00)",
+              "notes": "米其林一星",
+              "bgColor": "#FFF9E6",
+              "address_copy": "서울 종로구 북촌로 22 1층"
+            },
+            {
+              "name": "대사관앞환전 (明洞大使館換錢)",
+              "time": "下午",
+              "type": "Activity",
+              "hours": "每日 09:00–20:00",
+              "address_copy": "서울 중구 명동2길 26"
+            },
+            {
+              "name": "明洞逛街",
+              "time": "下午",
+              "type": "Activity"
+            },
+            {
+              "link": "https://maps.app.goo.gl/3A2X4Y8k2T5eP8wQ7",
+              "name": "조조칼국수 시청점 (朝朝刀削麵 市政廳店)",
+              "time": "晚餐",
+              "type": "Food",
+              "hours": "每日 11:00–21:00 (休息時間 15:00–17:00)",
+              "bgColor": "#FFF9E6",
+              "address_copy": "27 Sejong-daero 11-gil, Jung District, Seoul, 南韓"
+            }
+          ]
+        },
+        {
+          "date": "2/14 (六)",
+          "items": [
+            {
+              "name": "明月格韓服裝髮",
+              "time": "08:30",
+              "type": "Activity",
+              "bgColor": "#f5e0ce",
+              "highlight": true
+            },
+            {
+              "link": "https://maps.app.goo.gl/3hJ5D7NqZ4pLg6F8A",
+              "name": "景福宮韓服拍照",
+              "time": "10:00-12:00",
+              "type": "Activity"
+            },
+            {
+              "link": "https://maps.app.goo.gl/5z4B1wUuLu6eK8tY8",
+              "name": "토속촌 삼계탕 (土俗村蔘雞湯)",
+              "time": "午餐",
+              "type": "Food",
+              "hours": "每日 10:00–22:00",
+              "bgColor": "#FFF9E6",
+              "naver_link": "https://naver.me/FM6Bdfws",
+              "address_copy": "5 Jahamun-ro 5-gil, JongnoDistrict, Seoul, 南韓"
+            },
+            {
+              "name": "古宮博物館",
+              "time": "下午",
+              "type": "Sightseeing"
+            },
+            {
+              "name": "歷史博物館",
+              "time": "下午",
+              "type": "Sightseeing"
+            },
+            {
+              "link": "https://maps.app.goo.gl/A7F8U3x5L9JpY4kC9",
+              "name": "계림 辣雞湯 (Gyerim)",
+              "time": "晚餐",
+              "type": "Food",
+              "notes": "地址: 서울 종로구 돈화문로4길 39",
+              "bgColor": "#FFF9E6"
+            }
+          ]
+        },
+        {
+          "date": "2/15 (日)",
+          "items": [
+            {
+              "name": "北村逛街",
+              "time": "上午",
+              "type": "Activity"
+            },
+            {
+              "name": "換住宿 (遷往 Airbnb)",
+              "time": "下午",
+              "type": "Travel",
+              "bgColor": "#d7e4f7",
+              "highlight": true
+            },
+            {
+              "name": "弘大逛街",
+              "time": "下午",
+              "type": "Activity"
+            },
+            {
+              "name": "풍천장어 (弘大烤鰻魚)",
+              "time": "晚餐",
+              "type": "Food",
+              "hours": "每日 11:30–22:00",
+              "bgColor": "#FFF9E6",
+              "address_copy": "서울 마포구 동교로27길 39"
+            }
+          ]
+        },
+        {
+          "date": "2/16 (一)",
+          "items": [
+            {
+              "link": "https://maps.app.goo.gl/5tY8H7kG6R9pV2wD8",
+              "name": "包車: 南怡島, 三岳山纜車",
+              "time": "全天",
+              "type": "Sightseeing",
+              "bgColor": "#A9B5A4",
+              "highlight": true
+            }
+          ]
+        },
+        {
+          "date": "2/17 (二)",
+          "items": [
+            {
+              "name": "DMZ 一日遊",
+              "time": "全天",
+              "type": "Sightseeing",
+              "bgColor": "#A9B5A4",
+              "highlight": true
+            }
+          ]
+        },
+        {
+          "date": "2/18 (三)",
+          "items": [
+            {
+              "link": "https://maps.app.goo.gl/W7H8U3x5L9JpZ4jB9",
+              "name": "望遠市場",
+              "time": "上午",
+              "type": "Activity"
+            },
+            {
+              "name": "首爾站樂天超市",
+              "time": "下午",
+              "type": "Shopping"
+            }
+          ]
+        },
+        {
+          "date": "2/19 (四)",
+          "items": [
+            {
+              "link": "https://maps.app.goo.gl/H5J8K7oL6M2nT4xP9",
+              "name": "包車: 大關嶺 三養牧場, 韓國江原道月精寺",
+              "time": "全天",
+              "type": "Sightseeing",
+              "bgColor": "#A9B5A4",
+              "highlight": true
+            }
+          ]
+        },
+        {
+          "date": "2/20 (五)",
+          "items": [
+            {
+              "name": "自由活動",
+              "time": "全天",
+              "type": "Activity"
+            }
+          ]
+        },
+        {
+          "date": "2/21 (六)",
+          "items": [
+            {
+              "name": "退房並前往仁川機場",
+              "time": "09:00",
+              "type": "Travel",
+              "notes": "CI165 12:00 起飛，請預留充足時間辦理登機手續",
+              "bgColor": "#d7e4f7",
+              "highlight": true
+            },
+            {
+              "name": "華航CI165 仁川-高雄",
+              "time": "12:00",
+              "type": "Travel",
+              "bgColor": "#d7e4f7",
+              "highlight": true
+            }
+          ]
+        }
+      ],
+      "guide_spots": [
+        {
+          "map": {
+            "lat": 37.58,
+            "lng": 126.98
+          },
+          "name": "景福宮",
+          "intro": "景福宮是朝鮮王朝（1392-1897年）的正宮，意為「大吉大利、福祿綿長」。它建於1395年，是韓國五大宮궐中規模最大、建築設計最精美的。最著名的勤政殿是用於國家儀式和接見外國使節的地方，而香遠亭則是湖畔的優美亭閣。冷知識：在日治時期，宮殿的大部分被毀損，現今所見是多年來修復的結果，體現了韓國對歷史的堅守與復興。"
+        },
+        {
+          "map": {
+            "lat": 37.93,
+            "lng": 126.7
+          },
+          "name": "DMZ 非軍事區",
+          "intro": "DMZ（Demilitarized Zone）是分隔南北韓的緩衝區，長約250公里，寬約4公里。雖然名為非軍事區，但它是世界上軍事化程度最高的地區之一。這裏同時也是一個生態天堂，因為人類活動的限制，成為了許多珍稀野生動植物的棲息地。參觀行程通常包括板門店、第三地道和都羅展望台。冷知識：DMZ 內部有一個名為「和平之村」（大成洞）的村莊，是唯一允許平民居住在DMZ內的特例。"
+        }
+      ],
+      "accommodation": [
+        {
+          "date": "2/13 - 2/15",
+          "name": "大自然韓屋旅館 (Dajayon Hanok Stay)",
+          "address": "81-3, Yulgok-ro 10-gil, Jongro-gu, 鐘路, 首爾, 韓國",
+          "mapLink": "https://www.google.com/maps/place/Dajayon+Hanok+Stay/data=!4m2!3m1!1s0x357ca352a7cdd2d5:0x5c2a92c61f4e3531?sa=X&ved=1t:242&ictx=111"
+        },
+        {
+          "date": "2/15 - 2/21",
+          "name": "Airbnb 旅館 (麻浦區)",
+          "address": "29 Dohwa 2-gil, Dohwa-dong, Mapo-gu, Seoul, South Korea",
+          "mapLink": "https://www.google.com/maps/place/29+Dohwa+2-gil,+Mapo-gu,+Seoul,+%E5%8D%97%E9%9F%93/@37.5394541,126.9496077,17z/data=!3m1!4b1!4m6!3m5!1s0x357c98a8a4569029:0x95d15235dbbefdfc!8m2!3d37.5394541!4d126.9496077!16s%2Fg%2F11bzgc92fl?entry=ttu&g_ep=EgoyMDI1MTEyMy4xIKXMDSoASAFQAw%3D%3D"
+        }
+      ]
+    },
+    "KR_TRIP_APP_APP_TITLE": "🇰🇷 首爾玩什麼呢"
+  }
+}
+</script>
+<script>
+(function(){
+  try {
+    const el = document.getElementById("KR_TRIP_APP_EMBEDDED_BACKUP");
+    if (!el) return;
+
+    const backup = JSON.parse(el.textContent || el.innerText || "{}");
+    const backupId =
+      (backup && (backup.exportedAt || backup.exported_at || backup.timestamp)) ? 
+        String(backup.exportedAt || backup.exported_at || backup.timestamp) :
+        "unknown";
+
+    // New marker (so this upgrade definitely runs once even if you applied older imports before)
+    const markerKey = "KR_TRIP_APP_EMBEDDED_ITINERARY_OVERRIDE_APPLIED";
+    const markerValue = "applied:" + backupId + ":v2";
+    if (localStorage.getItem(markerKey) === markerValue) return;
+
+    // 1) Keep the original behavior: only fill missing keys (no overwriting other data)
+    if (backup && backup.data && typeof backup.data === "object") {
+      for (const [k, v] of Object.entries(backup.data)) {
+        try {
+          if (localStorage.getItem(k) === null) {
+            localStorage.setItem(k, JSON.stringify(v));
+          }
+        } catch (e) {
+          console.warn("[KR_TRIP_APP] Failed to set localStorage key:", k, e);
+        }
+      }
+    }
+
+    // 2) Force overwrite ONLY the daily itinerary, strictly from the backup file.
+    //    This will replace the existing itinerary even if the device already has old data.
+    try {
+      const backupTrip = backup && backup.data && backup.data.KR_TRIP_APP_TRIP_DATA;
+      if (backupTrip && Array.isArray(backupTrip.itinerary)) {
+        let currentTrip = {};
+        try {
+          const raw = localStorage.getItem("KR_TRIP_APP_TRIP_DATA");
+          currentTrip = raw ? JSON.parse(raw) : {};
+        } catch (e) {
+          currentTrip = {};
+        }
+        if (!currentTrip || typeof currentTrip !== "object") currentTrip = {};
+        currentTrip.itinerary = backupTrip.itinerary;
+
+        localStorage.setItem("KR_TRIP_APP_TRIP_DATA", JSON.stringify(currentTrip));
+      } else {
+        console.warn("[KR_TRIP_APP] No itinerary found in embedded backup (KR_TRIP_APP_TRIP_DATA.itinerary).");
+      }
+    } catch (e) {
+      console.warn("[KR_TRIP_APP] Failed to force-overwrite itinerary from embedded backup:", e);
+    }
+
+    // Set marker BEFORE reload to avoid loops
+    localStorage.setItem(markerKey, markerValue);
+
+    // Reload so the UI re-reads localStorage and shows the updated itinerary
+    location.reload();
+  } catch (e) {
+    console.warn("[KR_TRIP_APP] Embedded import failed:", e);
+  }
+})();
+</script>
 
 </body>
 </html>
