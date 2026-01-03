@@ -532,29 +532,69 @@
         }
         
         
+
+
 // ===============================
-// Cloud Sync (Supabase)
+// Cloud Sync (Supabase) — Safe Auto Sync
 // ===============================
 // 1) Supabase 兩個值（你已填好）：
 const SUPABASE_URL = "https://iqkhvluwlkqmwgynwxnh.supabase.co"; // 你的 Supabase Project URL
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlxa2h2bHV3bGtxbXdneW53eG5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU1OTM3NTMsImV4cCI6MjA4MTE2OTc1M30.3FCpo4LCfCQWBj3PcZP4IJTYLR1lp_xmqan9zG3BHz0"; // Supabase Settings → API → anon public（不要放 service_role）
 const ENABLE_CLOUD_SYNC = SUPABASE_ANON_KEY !== "PASTE_YOUR_SUPABASE_ANON_KEY_HERE";
+
 // 2) 同一群人共用同一份資料（可改成不同名稱）
 const SHARED_DOC_ID = "seoul-trip";
 
 // 3) 要同步的 localStorage keys
 const SYNC_KEYS = [exchangeRateKey, daesagwanRateKey, expensesKey, checklistKey, memoKey, memoInfoKey, tripDataKey, APP_TITLE_KEY];
 
+// 4) 本機同步狀態（用於「誰比較新」與避免誤覆蓋）
+const CLOUD_LOCAL_META_KEY = `${APP_ID}_CLOUD_LOCAL_META_V1`;
+function _getLocalCloudMeta() {
+  try {
+    const raw = localStorage.getItem(CLOUD_LOCAL_META_KEY);
+    const obj = raw ? JSON.parse(raw) : {};
+    if (!obj || typeof obj !== 'object') return {};
+    return obj;
+  } catch (e) { return {}; }
+}
+function _setLocalCloudMeta(meta) {
+  try { localStorage.setItem(CLOUD_LOCAL_META_KEY, JSON.stringify(meta || {})); } catch (e) {}
+}
+function _ensureDeviceId() {
+  const meta = _getLocalCloudMeta();
+  if (meta.deviceId) return meta.deviceId;
+  let id = '';
+  try { id = crypto.randomUUID(); } catch (e) { id = 'dev_' + Date.now() + '_' + Math.random().toString(16).slice(2); }
+  meta.deviceId = id;
+  if (!meta.updatedAtMs) meta.updatedAtMs = Date.now();
+  _setLocalCloudMeta(meta);
+  return id;
+}
+function _markLocalChanged() {
+  const meta = _getLocalCloudMeta();
+  _ensureDeviceId();
+  meta.updatedAtMs = Date.now();
+  _setLocalCloudMeta(meta);
+}
+function _localUpdatedAtMs() {
+  const meta = _getLocalCloudMeta();
+  return Number(meta.updatedAtMs) || 0;
+}
+
 let supabaseClient = null;
-let cloudAutoSync = false; // 手動同步（B方案：不自動上傳/拉取）
+// 安全起見：有啟用雲端才自動同步；未啟用就維持手動按鈕（按鈕也會被 disable）
+let cloudAutoSync = !!ENABLE_CLOUD_SYNC;
 let cloudPushTimer = null;
 let cloudPollTimer = null;
 let cloudLastPushedHash = "";
 let cloudLastRemoteUpdatedAt = null;
 let cloudApplyingRemoteSnapshot = false;
+let cloudReady = false; // 初次 pull 完成後才允許自動 push（避免解鎖後先把舊資料蓋掉）
 
 function initSupabaseClient() {
   try {
+    if (!ENABLE_CLOUD_SYNC) return null;
     if (!window.supabase || !window.supabase.createClient) {
       console.warn("[CloudSync] Supabase client not loaded.");
       return null;
@@ -569,30 +609,44 @@ function initSupabaseClient() {
 function buildLocalSnapshot() {
   const snap = {};
   for (const k of SYNC_KEYS) {
-    // Only include keys that actually exist and are not null.
-    // This prevents us from pushing lots of nulls and later overwriting defaults.
     const raw = localStorage.getItem(k);
     if (raw === null) continue;
     try {
       const v = JSON.parse(raw);
       if (v === null || v === undefined) continue;
       snap[k] = v;
-    } catch (e) {
-      // ignore invalid JSON
-    }
+    } catch (e) {}
   }
+  // 內嵌 meta 只放在雲端（不寫回 localStorage），用於比較新舊與除錯
+  snap.__meta = {
+    appId: APP_ID,
+    deviceId: _ensureDeviceId(),
+    localUpdatedAtMs: _localUpdatedAtMs(),
+    pushedAt: new Date().toISOString()
+  };
   return snap;
 }
 
 async function ensureSharedDocExists() {
   if (!supabaseClient) return;
   try {
-    // 若不存在就建立一筆（upsert）
-    const now = new Date().toISOString();
-    const empty = buildLocalSnapshot();
-    await supabaseClient
+    // 若已存在就不要寫入（避免把遠端用本機覆蓋）
+    const { data, error } = await supabaseClient
       .from("shared_docs")
-      .upsert({ id: SHARED_DOC_ID, data: empty, updated_at: now }, { onConflict: "id" });
+      .select("id")
+      .eq("id", SHARED_DOC_ID)
+      .maybeSingle();
+
+    if (error && error.code !== "PGRST116") throw error; // PGRST116: no rows
+    if (data && data.id) return;
+
+    const snapshot = buildLocalSnapshot();
+    const now = new Date().toISOString();
+    const { error: insErr } = await supabaseClient
+      .from("shared_docs")
+      .insert({ id: SHARED_DOC_ID, data: snapshot, updated_at: now });
+
+    if (insErr) throw insErr;
   } catch (e) {
     console.error("[CloudSync] ensure doc failed:", e);
   }
@@ -600,59 +654,101 @@ async function ensureSharedDocExists() {
 
 function scheduleCloudPush() {
   if (!cloudAutoSync) return;
+  if (!ENABLE_CLOUD_SYNC) return;
+  if (!cloudReady) return;
   if (cloudApplyingRemoteSnapshot) return;
   clearTimeout(cloudPushTimer);
-  cloudPushTimer = setTimeout(pushToCloud, 800);
+  cloudPushTimer = setTimeout(() => pushToCloud(false), 900);
 }
 
-async function pushToCloud() {
+async function pushToCloud(force = false) {
+  if (!ENABLE_CLOUD_SYNC) return;
   if (!supabaseClient) supabaseClient = initSupabaseClient();
   if (!supabaseClient) return;
+
   try {
     const snapshot = buildLocalSnapshot();
     const hash = JSON.stringify(snapshot);
-    if (hash === cloudLastPushedHash) return;
+    if (!force && hash === cloudLastPushedHash) return;
 
-    cloudLastPushedHash = hash;
+    // 先讀遠端 updated_at：若遠端比本機新，避免自動覆蓋（需手動 force）
+    const { data: remote, error: selErr } = await supabaseClient
+      .from("shared_docs")
+      .select("updated_at, data")
+      .eq("id", SHARED_DOC_ID)
+      .maybeSingle();
+
+    if (selErr && selErr.code !== "PGRST116") throw selErr;
+
+    const localMs = _localUpdatedAtMs();
+    const remoteMs = remote?.updated_at ? Date.parse(remote.updated_at) : 0;
+
+    if (!force && remoteMs && localMs && remoteMs > localMs + 2000) {
+      // 遠端較新 → 不自動推（避免把別人剛改的蓋掉）
+      return;
+    }
+
     const now = new Date().toISOString();
-
-    const { data, error } = await supabaseClient
+    const { data: up, error } = await supabaseClient
       .from("shared_docs")
       .upsert({ id: SHARED_DOC_ID, data: snapshot, updated_at: now }, { onConflict: "id" })
       .select("updated_at")
       .single();
 
     if (error) throw error;
-    cloudLastRemoteUpdatedAt = data?.updated_at || now;
+
+    cloudLastPushedHash = hash;
+    cloudLastRemoteUpdatedAt = up?.updated_at || now;
   } catch (e) {
     console.error("[CloudSync] push failed:", e);
   }
 }
 
 async function pullFromCloud(force = false) {
+  if (!ENABLE_CLOUD_SYNC) return;
   if (!supabaseClient) supabaseClient = initSupabaseClient();
   if (!supabaseClient) return;
+
   try {
     const { data, error } = await supabaseClient
       .from("shared_docs")
       .select("data, updated_at")
       .eq("id", SHARED_DOC_ID)
-      .single();
+      .maybeSingle();
 
-    if (error) throw error;
-    if (!data) return;
+    if (error && error.code !== "PGRST116") throw error;
+    if (!data || !data.data) return;
 
     const remoteUpdatedAt = data.updated_at || null;
-    if (!force && remoteUpdatedAt && cloudLastRemoteUpdatedAt && remoteUpdatedAt <= cloudLastRemoteUpdatedAt) {
+    const remoteMs = remoteUpdatedAt ? Date.parse(remoteUpdatedAt) : 0;
+
+    // 若遠端沒有更新（或已處理過），直接跳過
+    if (!force && remoteUpdatedAt && cloudLastRemoteUpdatedAt && remoteUpdatedAt <= cloudLastRemoteUpdatedAt) return;
+
+    // 若本機比遠端新，避免自動覆蓋（需手動 force）
+    const localMs = _localUpdatedAtMs();
+    if (!force && localMs && remoteMs && localMs > remoteMs + 2000) {
       return;
     }
 
-    // 防止自己剛推上去又被拉回來造成循環
-    cloudLastRemoteUpdatedAt = remoteUpdatedAt;
-
-    if (data.data) {
+    cloudApplyingRemoteSnapshot = true;
+    try {
       applyRemoteSnapshot(data.data);
+      // 將本機 meta 更新到遠端時間（代表目前狀態以遠端為準）
+      const meta = _getLocalCloudMeta();
+      _ensureDeviceId();
+      meta.updatedAtMs = remoteMs || Date.now();
+      meta.lastPulledAt = new Date().toISOString();
+      _setLocalCloudMeta(meta);
+
+      // 記住最新遠端時間，避免循環
+      cloudLastRemoteUpdatedAt = remoteUpdatedAt;
+    } finally {
+      cloudApplyingRemoteSnapshot = false;
     }
+
+    // 讓 UI 立即反映（匯入/拉取都需要這個）
+    try { refreshAppFromStorage({ keepTab: true }); } catch (e) {}
   } catch (e) {
     console.error("[CloudSync] pull failed:", e);
   }
@@ -663,7 +759,6 @@ function applyRemoteSnapshot(snapshot) {
   for (const k of SYNC_KEYS) {
     if (!(k in snapshot)) continue;
     const v = snapshot[k];
-    // Never write null/undefined into localStorage; keep app defaults instead.
     if (v === null || v === undefined) continue;
     try {
       localStorage.setItem(k, JSON.stringify(v));
@@ -673,16 +768,18 @@ function applyRemoteSnapshot(snapshot) {
 
 function startCloudSync() {
   if (!cloudAutoSync) return;
+  if (!ENABLE_CLOUD_SYNC) return;
 
   // 只在解鎖後開始同步（避免被未授權者一直打 API）
   if (window.__isAppUnlocked && !window.__isAppUnlocked()) return;
 
-  if (!supabaseClient) {
-    supabaseClient = initSupabaseClient();
-  }
+  if (!supabaseClient) supabaseClient = initSupabaseClient();
   if (!supabaseClient) return;
 
-  ensureSharedDocExists().then(() => pullFromCloud(true));
+  cloudReady = false;
+  ensureSharedDocExists()
+    .then(() => pullFromCloud(true))
+    .finally(() => { cloudReady = true; });
 
   clearInterval(cloudPollTimer);
   cloudPollTimer = setInterval(() => pullFromCloud(false), 15000);
@@ -695,19 +792,18 @@ function startCloudSync() {
     try { if (typeof prev === "function") prev(); } catch (e) {}
     startCloudSync();
   };
-  // 如果一開始就已經解鎖，直接啟動
   try { if (window.__isAppUnlocked && window.__isAppUnlocked()) startCloudSync(); } catch (e) {}
 })();
 
-// setLocalStorage 包一層：每次寫入 localStorage，就自動排程推雲端
+// setLocalStorage 包一層：每次寫入 localStorage，就標記本機已更新，並排程推雲端（若啟用）
 (function wrapSetLocalStorage() {
   const _orig = setLocalStorage;
   setLocalStorage = function (key, value) {
     _orig(key, value);
-    // 避免「從雲端套用」又觸發 push
-    if (!cloudApplyingRemoteSnapshot) {
-      scheduleCloudPush();
-    }
+    try {
+      if (SYNC_KEYS.includes(key)) _markLocalChanged();
+    } catch (e) {}
+    if (!cloudApplyingRemoteSnapshot) scheduleCloudPush();
   };
 })();
 
@@ -1441,6 +1537,7 @@ function compressImage(file, callback) {
 
         // --- 導航與內容渲染 (不變) ---
         function changeTab(tabName) {
+            try { window.__currentTab = tabName; } catch (e) {}
             const content = document.getElementById('app-content');
             const navItems = document.querySelectorAll('.nav-item');
 
@@ -1475,6 +1572,18 @@ case 'WALLET':
                     break;
             }
         }
+
+// --- refresh helpers: when localStorage changes (import / cloud pull / embedded seed) ---
+function refreshAppFromStorage(opts = {}) {
+    const keepTab = (opts && opts.keepTab !== undefined) ? !!opts.keepTab : true;
+    const tab = keepTab ? (window.__currentTab || document.querySelector('.nav-item.active')?.dataset?.tab || 'FLIGHTS_STAY') : (opts.tab || 'FLIGHTS_STAY');
+
+    try { loadInitialData(); } catch (e) {}
+    try { loadTitle(); } catch (e) {}
+    // re-render current tab
+    try { changeTab(tab); } catch (e) {}
+}
+try { window.__refreshFromStorage = refreshAppFromStorage; } catch (e) {}
         
         // --- Tab: FLIGHTS_STAY (航班與住宿) 渲染 (不變) ---
         function renderFlightsStayTab(container) {
@@ -2559,7 +2668,7 @@ case 'WALLET':
 
             const enabled = (typeof ENABLE_CLOUD_SYNC !== 'undefined') ? !!ENABLE_CLOUD_SYNC : false;
             if (pill) {
-                pill.textContent = enabled ? '啟用中' : '未啟用';
+                pill.textContent = enabled ? (cloudAutoSync ? '啟用中(自動)' : '啟用中(手動)') : '未啟用';
             }
             if (!enabled) {
                 if (pullBtn) pullBtn.disabled = true;
@@ -2570,11 +2679,14 @@ case 'WALLET':
 
             if (pullBtn) pullBtn.addEventListener('click', async () => {
                 if (!enabled) { alertModal("雲端同步尚未啟用。"); return; }
-                try { await pullFromCloud(true); changeTab('INFO'); alertModal("已從雲端更新本機。"); } catch (e) { console.error(e); alertModal("從雲端更新失敗，請稍後再試。"); }
+                try { await pullFromCloud(true);
+                try { refreshAppFromStorage({ keepTab: true }); } catch (e) {}
+                alertModal("已從雲端更新本機。"); } catch (e) { console.error(e); alertModal("從雲端更新失敗，請稍後再試。"); }
             });
             if (pushBtn) pushBtn.addEventListener('click', async () => {
                 if (!enabled) { alertModal("雲端同步尚未啟用。"); return; }
-                try { await pushToCloud(); alertModal("已上傳到雲端。"); } catch (e) { console.error(e); alertModal("上傳到雲端失敗，請稍後再試。"); }
+                try { await pushToCloud(true);
+                alertModal("已上傳到雲端。\n（若多人同時編輯，建議先按一次『從雲端更新本機』再上傳）"); } catch (e) { console.error(e); alertModal("上傳到雲端失敗，請稍後再試。"); }
             });
 
             // ===== 自我檢查 =====
@@ -2985,8 +3097,11 @@ function importLocalBackupJSON(file){
       // 套用到本機（僅寫入 SYNC_KEYS 內的鍵）
       applyRemoteSnapshot(data);
 
-      // 重新渲染一次，確保介面更新
-      try { changeTab('INFO'); } catch (e) {}
+      // 匯入後：更新本機 meta（避免下一次自動 pull/push 判斷錯誤）
+      try { _markLocalChanged(); } catch (e) {}
+
+      // 重新渲染：讓 UI 與記憶體狀態立刻同步
+      try { refreshAppFromStorage({ keepTab: true }); } catch (e) {}
       alertModal("已匯入備份並套用。");
     }catch(err){
       console.error(err);
@@ -3387,56 +3502,54 @@ function importLocalBackupJSON(file){
 
     const backup = JSON.parse(el.textContent || el.innerText || "{}");
     const backupId =
-      (backup && (backup.exportedAt || backup.exported_at || backup.timestamp)) ? 
+      (backup && (backup.exportedAt || backup.exported_at || backup.timestamp)) ?
         String(backup.exportedAt || backup.exported_at || backup.timestamp) :
         "unknown";
 
-    // New marker (so this upgrade definitely runs once even if you applied older imports before)
-    const markerKey = "KR_TRIP_APP_EMBEDDED_ITINERARY_OVERRIDE_APPLIED";
-    const markerValue = "applied:" + backupId + ":v2";
+    const markerKey = "KR_TRIP_APP_EMBEDDED_BACKUP_APPLIED";
+    const markerValue = "applied:" + backupId + ":v3";
     if (localStorage.getItem(markerKey) === markerValue) return;
 
-    // 1) Keep the original behavior: only fill missing keys (no overwriting other data)
+    // 只在「本機幾乎沒有資料」或「行程表是空的」時，才把內嵌備份當作初始模板
+    const hasAnyKey = (function(){
+      try {
+        const keys = [
+          "KR_TRIP_APP_TRIP_DATA",
+          "KR_TRIP_APP_CHECKLIST",
+          "KR_TRIP_APP_EXPENSES",
+          "KR_TRIP_APP_MEMO",
+          "KR_TRIP_APP_MEMO_INFO",
+          "KR_TRIP_APP_APP_TITLE",
+          "KR_TRIP_APP_EXCHANGE_RATE"
+        ];
+        return keys.some(k => localStorage.getItem(k) !== null);
+      } catch (e) { return false; }
+    })();
+
+    let tripRaw = null;
+    let tripObj = null;
+    try { tripRaw = localStorage.getItem("KR_TRIP_APP_TRIP_DATA"); tripObj = tripRaw ? JSON.parse(tripRaw) : null; } catch (e) { tripObj = null; }
+    const itineraryEmpty = !(tripObj && Array.isArray(tripObj.itinerary) && tripObj.itinerary.length > 0);
+
     if (backup && backup.data && typeof backup.data === "object") {
-      for (const [k, v] of Object.entries(backup.data)) {
-        try {
-          if (localStorage.getItem(k) === null) {
-            localStorage.setItem(k, JSON.stringify(v));
+      if (!hasAnyKey || itineraryEmpty) {
+        // 只「補齊缺少的 key」，不覆蓋使用者已存在的資料
+        for (const [k, v] of Object.entries(backup.data)) {
+          try {
+            if (localStorage.getItem(k) === null) {
+              localStorage.setItem(k, JSON.stringify(v));
+            }
+          } catch (e) {
+            console.warn("[KR_TRIP_APP] Failed to set localStorage key:", k, e);
           }
-        } catch (e) {
-          console.warn("[KR_TRIP_APP] Failed to set localStorage key:", k, e);
         }
       }
     }
 
-    // 2) Force overwrite ONLY the daily itinerary, strictly from the backup file.
-    //    This will replace the existing itinerary even if the device already has old data.
-    try {
-      const backupTrip = backup && backup.data && backup.data.KR_TRIP_APP_TRIP_DATA;
-      if (backupTrip && Array.isArray(backupTrip.itinerary)) {
-        let currentTrip = {};
-        try {
-          const raw = localStorage.getItem("KR_TRIP_APP_TRIP_DATA");
-          currentTrip = raw ? JSON.parse(raw) : {};
-        } catch (e) {
-          currentTrip = {};
-        }
-        if (!currentTrip || typeof currentTrip !== "object") currentTrip = {};
-        currentTrip.itinerary = backupTrip.itinerary;
-
-        localStorage.setItem("KR_TRIP_APP_TRIP_DATA", JSON.stringify(currentTrip));
-      } else {
-        console.warn("[KR_TRIP_APP] No itinerary found in embedded backup (KR_TRIP_APP_TRIP_DATA.itinerary).");
-      }
-    } catch (e) {
-      console.warn("[KR_TRIP_APP] Failed to force-overwrite itinerary from embedded backup:", e);
-    }
-
-    // Set marker BEFORE reload to avoid loops
     localStorage.setItem(markerKey, markerValue);
 
-    // Reload so the UI re-reads localStorage and shows the updated itinerary
-    location.reload();
+    // 不再 reload：如果 app 已載入，直接要求重新渲染
+    try { if (typeof window.__refreshFromStorage === "function") window.__refreshFromStorage({ keepTab: true }); } catch (e) {}
   } catch (e) {
     console.warn("[KR_TRIP_APP] Embedded import failed:", e);
   }
