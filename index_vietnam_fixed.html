@@ -254,6 +254,12 @@
             <form id="itinerary-form" class="space-y-3">
                 <input type="hidden" id="modal-day-index">
                 <input type="hidden" id="modal-item-index">
+                <div>
+                    <label for="modal-day-select" class="block text-sm font-medium" style="color: var(--color-text-main);">日期</label>
+                    <select id="modal-day-select" class="w-full p-2 border rounded-lg" style="border-color: var(--color-divider);"></select>
+                    <p class="text-xs mt-1" style="color: var(--color-text-sub);">選擇日期後，儲存會自動加入到該日行程。</p>
+                </div>
+
 
                 <div>
                     <label for="modal-name" class="block text-sm font-medium" style="color: var(--color-text-main);">項目名稱</label>
@@ -293,15 +299,9 @@
                     </div>
                 </div>
 
-                <div class="flex items-center space-x-4">
-                    <div class="flex-1">
-                        <label for="modal-gmap" class="block text-sm font-medium" style="color: var(--color-text-main);">Google Map Link (link)</label>
-                        <input type="url" id="modal-gmap" class="w-full p-2 border rounded-lg text-xs" placeholder="http://googleusercontent.com/maps..." style="border-color: var(--color-divider);">
-                    </div>
-                    <div class="flex-1">
-                        <label for="modal-naver" class="block text-sm font-medium" style="color: var(--color-text-main);">Naver Map Link (naver_link)</label>
-                        <input type="url" id="modal-naver" class="w-full p-2 border rounded-lg text-xs" placeholder="https://naver.me/..." style="border-color: var(--color-divider);">
-                    </div>
+                <div>
+                    <label for="modal-gmap" class="block text-sm font-medium" style="color: var(--color-text-main);">Google Map Link (link)</label>
+                    <input type="url" id="modal-gmap" class="w-full p-2 border rounded-lg text-xs" placeholder="http://googleusercontent.com/maps..." style="border-color: var(--color-divider);">
                 </div>
                 
                 <div>
@@ -1049,13 +1049,14 @@ async function startCloudSync() {
   badge.textContent = `VND/TWD: ${rate.toFixed(3)}`;
 }
 
-        function krwToTwd(amount) {
-            const n = Number(amount) * Number(currentRate);
+        function krwToTwd(amount, rateOverride = null) {
+            const r = (rateOverride === null || rateOverride === undefined) ? Number(currentRate) : Number(rateOverride);
+            const n = Number(amount) * r;
             return Number.isFinite(n) ? n : 0;
         }
 
-        function formatTwd(amount, digits = 3) {
-            const n = krwToTwd(amount);
+        function formatTwd(amount, digits = 3, rateOverride = null) {
+            const n = krwToTwd(amount, rateOverride);
             return n.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
         }
 
@@ -1075,6 +1076,20 @@ async function startCloudSync() {
             form.reset();
             document.getElementById('modal-day-index').value = dayIndex;
             document.getElementById('modal-item-index').value = itemIndex !== null ? itemIndex : '';
+
+            // NEW: 可選日期（顯示 Day1~Day4），儲存時會依選擇的日期加入到對應天
+            const daySelect = document.getElementById('modal-day-select');
+            if (daySelect) {
+                daySelect.innerHTML = '';
+                const days = Array.isArray(tripData?.itinerary) ? tripData.itinerary : [];
+                days.forEach((d, idx) => {
+                    const opt = document.createElement('option');
+                    opt.value = String(idx);
+                    opt.textContent = String(d?.date || '').trim() || `Day${idx + 1}`;
+                    daySelect.appendChild(opt);
+                });
+                daySelect.value = String(dayIndex);
+            }
             
             // 重設顏色選擇為預設
             document.querySelector(`input[name="modal-bgColor"][value=""]`).checked = true;
@@ -1090,9 +1105,7 @@ async function startCloudSync() {
                 document.getElementById('modal-notes').value = item.notes || '';
                 document.getElementById('modal-hours').value = item.hours || '';
                 document.getElementById('modal-address').value = item.address_copy || '';
-                document.getElementById('modal-gmap').value = item.link || '';
-                document.getElementById('modal-naver').value = item.naver_link || '';
-                document.getElementById('modal-highlight').checked = item.highlight || false;
+                document.getElementById('modal-gmap').value = item.link || '';                document.getElementById('modal-highlight').checked = item.highlight || false;
                 
                 // NEW: 載入背景色
                 const savedColor = item.bgColor || '';
@@ -1110,7 +1123,9 @@ async function startCloudSync() {
         function handleItineraryItemSave(event) {
             event.preventDefault();
             
-            const dayIndex = parseInt(document.getElementById('modal-day-index').value, 10);
+            const fromDayIndex = parseInt(document.getElementById('modal-day-index').value, 10);
+            const sel = document.getElementById('modal-day-select');
+            const targetDayIndex = sel && sel.value !== '' ? parseInt(sel.value, 10) : fromDayIndex;
             const itemIndexStr = document.getElementById('modal-item-index').value;
             const itemIndex = itemIndexStr === '' ? null : parseInt(itemIndexStr, 10);
             
@@ -1122,9 +1137,7 @@ async function startCloudSync() {
                 name: document.getElementById('modal-name').value.trim(),
                 type: document.getElementById('modal-type').value,
                 notes: document.getElementById('modal-notes').value.trim() || undefined,
-                link: document.getElementById('modal-gmap').value.trim() || undefined,
-                naver_link: document.getElementById('modal-naver').value.trim() || undefined,
-                hours: document.getElementById('modal-hours').value.trim() || undefined,
+                link: document.getElementById('modal-gmap').value.trim() || undefined,                hours: document.getElementById('modal-hours').value.trim() || undefined,
                 address_copy: document.getElementById('modal-address').value.trim() || undefined,
                 highlight: document.getElementById('modal-highlight').checked || undefined,
                 bgColor: selectedColor || undefined // NEW: 加入背景色
@@ -1136,17 +1149,52 @@ async function startCloudSync() {
             // 深度複製 tripData
             const updatedTripData = JSON.parse(JSON.stringify(tripData));
 
+            // 依時間自動排序：新增/編輯後會依 time（HH:MM）重新排列當日行程
+            function _itineraryTimeKey(t) {
+                const s = String(t || '').trim();
+                const m = s.match(/(\d{1,2})\s*:\s*(\d{2})/);
+                if (!m) return 24 * 60 + 999; // 沒時間的排最後
+                const hh = Math.min(23, Math.max(0, parseInt(m[1], 10)));
+                const mm = Math.min(59, Math.max(0, parseInt(m[2], 10)));
+                return hh * 60 + mm;
+            }
+
+
             if (itemIndex !== null) {
-                // 編輯現有項目
-                updatedTripData.itinerary[dayIndex].items[itemIndex] = newItem;
+                // 編輯現有項目（若變更日期，會移動到新日期）
+                if (targetDayIndex === fromDayIndex) {
+                    updatedTripData.itinerary[fromDayIndex].items[itemIndex] = newItem;
+                } else {
+                    // 從原本日期移除，再加入到目標日期
+                    updatedTripData.itinerary[fromDayIndex].items.splice(itemIndex, 1);
+                    if (!updatedTripData.itinerary[targetDayIndex].items) updatedTripData.itinerary[targetDayIndex].items = [];
+                    updatedTripData.itinerary[targetDayIndex].items.push(newItem);
+                }
                 alertModal('行程項目已更新！');
             } else {
-                // 新增項目 (預設加在當日行程末尾)
-                updatedTripData.itinerary[dayIndex].items.push(newItem);
+                // 新增項目：依選擇的日期加入到該日行程
+                if (!updatedTripData.itinerary[targetDayIndex].items) updatedTripData.itinerary[targetDayIndex].items = [];
+                updatedTripData.itinerary[targetDayIndex].items.push(newItem);
                 alertModal('新的行程項目已加入！');
             }
 
-            setTripData(updatedTripData);
+            // 自動排序（依時間）－針對受影響的日期（原本日期 + 目標日期）
+            const affectedDays = Array.from(new Set([fromDayIndex, targetDayIndex]));
+            affectedDays.forEach((di) => {
+                if (updatedTripData.itinerary && updatedTripData.itinerary[di] && Array.isArray(updatedTripData.itinerary[di].items)) {
+                    updatedTripData.itinerary[di].items.sort((a, b) => {
+                        const ka = _itineraryTimeKey(a && a.time);
+                        const kb = _itineraryTimeKey(b && b.time);
+                        if (ka !== kb) return ka - kb;
+                        // 相同時間：以名稱穩定排序，避免跳動
+                        const na = String((a && a.name) || '');
+                        const nb = String((b && b.name) || '');
+                        return na.localeCompare(nb, 'zh-Hant');
+                    });
+                }
+            });
+
+setTripData(updatedTripData);
             document.getElementById('itinerary-modal').classList.add('hidden');
             // 必須傳入當前容器，以便重新渲染
             renderItineraryTab(document.getElementById('app-content')); 
@@ -1455,19 +1503,14 @@ case 'WALLET':
                                     const itemBgColor = item.bgColor && item.bgColor !== '' ? item.bgColor : 'white';
                                     const itemContainerStyle = `background-color: ${itemBgColor}; border-color: var(--color-divider);`;
 
-                                    const naverLink = item.naver_link || (item.address_copy ? `https://map.naver.com/v5/search/${encodeURIComponent(item.address_copy)}` : `https://map.naver.com/v5/search/${encodeURIComponent(item.name)}`);
-
-                                    const itemLink = (item.link || item.naver_link || item.type === 'Food' || item.type === 'Activity') ? `
+                                    const itemLink = (item.link || item.type === 'Food' || item.type === 'Activity') ? `
                                         <div class="mt-2 flex flex-wrap gap-2">
                                             ${item.link ? `
                                                 <a href="${item.link}" target="_blank" class="muji-btn-light text-xs px-2 py-1 flex items-center hover:shadow-md">
                                                     <i class="fas fa-map-pin mr-1"></i> Google Map
                                                 </a>
                                             ` : ''}
-                                            <a href="${naverLink}" target="_blank" class="muji-btn-light text-xs px-2 py-1 flex items-center hover:shadow-md">
-                                                <i class="fas fa-map mr-1"></i> Naver Map
-                                            </a>
-                                            <a href="https://www.google.com/search?q=${encodeURIComponent(item.name)} 食記" target="_blank" class="muji-btn-light text-xs px-2 py-1 flex items-center hover:shadow-md">
+<a href="https://www.google.com/search?q=${encodeURIComponent(item.name)} 食記" target="_blank" class="muji-btn-light text-xs px-2 py-1 flex items-center hover:shadow-md">
                                                 <i class="fas fa-utensils mr-1"></i> 食記/介紹
                                             </a>
                                         </div>
@@ -1598,7 +1641,13 @@ case 'WALLET':
                     <input type="datetime-local" id="expense-time" class="w-full p-2 mb-2 border rounded-lg text-sm" style="border-color: var(--color-divider);">
                     <p class="text-xs text-gray-500 mb-2">會用這個時間做排序與分日（記帳歷史會依天分區）。</p>
 <input type="text" id="expense-item" class="w-full p-2 mb-2 border rounded-lg" placeholder="品項名稱 (e.g. 午餐、咖啡)" style="border-color: var(--color-divider);">
-                    <input type="number" id="expense-krw" class="w-full p-2 mb-2 border rounded-lg" placeholder="越南盾金額 VND(đ)" style="border-color: var(--color-divider);">
+                    <div class="flex gap-2 mb-2">
+  <select id="expense-currency" class="p-2 border rounded-lg text-sm" style="border-color: var(--color-divider); background-color: white;">
+    <option value="VND">VND</option>
+    <option value="TWD">TWD</option>
+  </select>
+  <input type="number" id="expense-krw" class="w-full p-2 border rounded-lg" placeholder="越南盾金額 VND(đ)" style="border-color: var(--color-divider);">
+                    </div>
                     <input type="text" id="expense-note" class="w-full p-2 mb-2 border rounded-lg" placeholder="備註（可自由填寫）" style="border-color: var(--color-divider);">
 
                     <div class="mt-2">
@@ -2201,7 +2250,7 @@ if (others.length) {
 
                             <div class="text-right flex flex-col items-end justify-between space-y-1 ml-2 shrink-0">
                                 <p class="text-sm font-semibold whitespace-nowrap" style="color: var(--color-text-main);">${Number(exp.krw || 0).toLocaleString()} VND(đ)</p>
-                                <p class="text-xs text-gray-500 whitespace-nowrap">${TWD_SYMBOL} ${formatTwd(exp.krw || 0, 3)}</p>
+                                <p class="text-xs text-gray-500 whitespace-nowrap">${TWD_SYMBOL} ${formatTwd(exp.krw || 0, 3, (exp && exp.rateUsed) ? exp.rateUsed : null)}</p>
 
                                 <button onclick="toggleExpenseSettled(${exp.id})" class="flex items-center gap-2 text-[11px] px-2 py-1 rounded-full border hover:shadow-sm transition duration-150"
                                     style="border-color: var(--color-divider); background-color: ${isSettled ? '#d7e4f7' : 'white'};">
@@ -2241,8 +2290,15 @@ if (others.length) {
                                     <input type="text" id="edit-item-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);" value="${escHtml(exp.item || '')}">
                                 </div>
                                 <div>
-                                    <label class="block text-xs text-gray-600 mb-1">金額（VND）</label>
-                                    <input type="number" id="edit-amount-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);" value="${Number(exp.krw || 0)}">
+                                    <label class="block text-xs text-gray-600 mb-1">金額</label>
+                                    <div class="flex gap-2">
+                                        <select id="edit-currency-${exp.id}" class="p-2 border rounded-lg text-sm" style="border-color: var(--color-divider); background-color: white;">
+                                            <option value="VND" ${String(exp.currencyOriginal||"VND")==="VND" ? "selected" : ""}>VND</option>
+                                            <option value="TWD" ${String(exp.currencyOriginal||"VND")==="TWD" ? "selected" : ""}>TWD</option>
+                                        </select>
+                                        <input type="number" id="edit-amount-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);" value="${(String(exp.currencyOriginal||"VND")==="TWD" && Number.isFinite(Number(exp.amountOriginal))) ? Number(exp.amountOriginal) : Number(exp.krw || 0)}">
+                                    </div>
+                                    <p class="text-xs text-gray-500 mt-1">選 TWD 時，會用該筆的匯率（或目前匯率）換算成 VND 存檔。</p>
                                 </div>
                                 <div class="md:col-span-2">
                                     <label class="block text-xs text-gray-600 mb-1">備註</label>
@@ -2481,12 +2537,24 @@ const settlePairs = (settleView.netLines || [])
 
             const itemEl = document.getElementById(`edit-item-${expenseId}`);
             const amountEl = document.getElementById(`edit-amount-${expenseId}`);
+            const currencyEl = document.getElementById(`edit-currency-${expenseId}`);
+
             const categoryEl = document.getElementById(`edit-category-${expenseId}`);
             const timeEl = document.getElementById(`edit-time-${expenseId}`);
             const noteEl = document.getElementById(`edit-note-${expenseId}`);
 
             const item = itemEl ? String(itemEl.value || '').trim() : '';
-            const amount = amountEl ? parseInt(amountEl.value, 10) : NaN;
+            const currency = currencyEl ? String(currencyEl.value || 'VND') : 'VND';
+            const amountOriginal = amountEl ? parseFloat(amountEl.value) : NaN;
+            const rateUsedNow = Number(getLocalStorage(exchangeRateKey, currentRate)) || Number(currentRate) || 0;
+            let amount = NaN;
+            if (currency === 'TWD') {
+                if (!rateUsedNow) amount = NaN;
+                else amount = Math.round(amountOriginal / rateUsedNow);
+            } else {
+                amount = Math.round(amountOriginal);
+            }
+
             const category = categoryEl ? String(categoryEl.value || '').trim() : '';
             const spentAt = timeEl ? String(timeEl.value || '').trim() : '';
             const note = noteEl ? String(noteEl.value || '').trim() : '';
@@ -2495,7 +2563,7 @@ const settlePairs = (settleView.netLines || [])
             const payerChecked = Array.from(document.querySelectorAll(`.edit-payer-${expenseId}:checked`)).map(el => el.value);
 
             if (!item || !Number.isFinite(amount) || amount <= 0) {
-                alertModal("請輸入有效的品項名稱和越南盾金額。");
+                alertModal("請輸入有效的品項名稱和金額。");
                 return;
             }
 
@@ -2527,7 +2595,10 @@ const settlePairs = (settleView.netLines || [])
             expenses[idx] = {
                 ...expenses[idx],
                 item,
-                krw: amount,
+                krw: amount, // 內部統一存 VND（整數）
+                currencyOriginal: currency,
+                amountOriginal: Number.isFinite(amountOriginal) ? amountOriginal : null,
+                rateUsed: rateUsedNow || expenses[idx].rateUsed || null,
                 category: category || expenses[idx].category,
                 spentAt: finalSpentAt,
                 note: note,
@@ -2847,6 +2918,8 @@ function exportReportCSV() {
       "金額(VND)",
       "匯率(VND/TWD)",
       "金額(TWD)",
+      "原幣別",
+      "原金額",
       "誰消費",
       "誰結帳",
       "備註",
@@ -2867,7 +2940,8 @@ function exportReportCSV() {
     for (const e of sorted) {
       const dt = _formatDateTimeLocal(e.spentAt, e.timestamp);
       const vnd = Number(e.krw) || 0;
-      const twd = Math.round(vnd * rate * 100) / 100;
+      const rateLine = (e && e.rateUsed) ? Number(e.rateUsed) : rate;
+      const twd = Math.round(vnd * rateLine * 100) / 100;
 
       const consumers = Array.isArray(e.consumers) ? e.consumers.join("、") : (e.consumers || "");
       const payers = Array.isArray(e.payers) ? e.payers.join("、") : (e.payers || "");
@@ -2878,8 +2952,10 @@ function exportReportCSV() {
         e.item || "",
         catName,
         vnd,
-        rate,
+        rateLine,
         twd,
+        (e.currencyOriginal || 'VND'),
+        (Number.isFinite(Number(e.amountOriginal)) ? e.amountOriginal : ''),
         consumers,
         payers,
         e.note || "",
@@ -2934,7 +3010,8 @@ function exportReportPDF() {
     for (const e of sorted) {
       const dt = _formatDateTimeLocal(e.spentAt, e.timestamp);
       const vnd = Number(e.krw) || 0;
-      const twd = Math.round(vnd * rate * 100) / 100;
+      const rateLine = (e && e.rateUsed) ? Number(e.rateUsed) : rate;
+      const twd = Math.round(vnd * rateLine * 100) / 100;
       const consumers = Array.isArray(e.consumers) ? e.consumers.join("、") : (e.consumers || "");
       const payers = Array.isArray(e.payers) ? e.payers.join("、") : (e.payers || "");
       const catName = catMap[e.category] || e.category || "";
@@ -2944,8 +3021,10 @@ function exportReportPDF() {
         <td>${escapeHtml(e.item || "")}</td>
         <td>${escapeHtml(catName)}</td>
         <td style="text-align:right;">${escapeHtml(vnd)}</td>
-        <td style="text-align:right;">${escapeHtml(rate)}</td>
+        <td style="text-align:right;">${escapeHtml(rateLine)}</td>
         <td style="text-align:right;">${escapeHtml(twd)}</td>
+        <td>${escapeHtml(e.currencyOriginal || "VND")}</td>
+        <td style="text-align:right;">${escapeHtml(Number.isFinite(Number(e.amountOriginal)) ? e.amountOriginal : "")}</td>
         <td>${escapeHtml(consumers)}</td>
         <td>${escapeHtml(payers)}</td>
         <td>${escapeHtml(e.note || "")}</td>
@@ -2979,11 +3058,11 @@ function exportReportPDF() {
         <thead>
           <tr>
             <th>消費時間</th><th>品項</th><th>分類</th>
-            <th>金額(VND)</th><th>匯率</th><th>金額(TWD)</th>
+            <th>金額(VND)</th><th>匯率</th><th>金額(TWD)</th><th>原幣別</th><th>原金額</th>
             <th>誰消費</th><th>誰結帳</th><th>備註</th><th>結清</th>
           </tr>
         </thead>
-        <tbody>${rowsHtml || `<tr><td colspan="10" style="text-align:center; color:#666;">目前沒有記帳紀錄。</td></tr>`}</tbody>
+        <tbody>${rowsHtml || `<tr><td colspan="12" style="text-align:center; color:#666;">目前沒有記帳紀錄。</td></tr>`}</tbody>
       </table>
     </body></html>`);
     win.document.close();
@@ -3057,12 +3136,35 @@ if (exportPdfBtn) exportPdfBtn.addEventListener('click', exportReportPDF);
             document.getElementById('add-expense-btn').addEventListener('click', () => {
                 const itemInput = document.getElementById('expense-item');
                 const amountInput = document.getElementById('expense-krw');
+                const currencyInput = document.getElementById('expense-currency');
+                if (currencyInput && amountInput) {
+                    const syncPh = () => {
+                        const cur = String(currencyInput.value || 'VND');
+                        amountInput.placeholder = (cur === 'TWD') ? '台幣金額 TWD' : '越南盾金額 VND(đ)';
+                    };
+                    currencyInput.addEventListener('change', syncPh);
+                    syncPh();
+                }
+
                 const categoryInput = document.getElementById('expense-category');
                 const timeInput = document.getElementById('expense-time');
                 const noteInput = document.getElementById('expense-note');
 
                 const item = itemInput.value.trim();
-                const amount = parseInt(amountInput.value, 10);
+                const currencySel = document.getElementById('expense-currency');
+                const currency = currencySel ? String(currencySel.value || 'VND') : 'VND';
+                const amountOriginal = parseFloat(amountInput.value);
+                const rateUsed = Number(getLocalStorage(exchangeRateKey, currentRate)) || Number(currentRate) || 0;
+                let amountVnd = NaN;
+                if (currency === 'TWD') {
+                    // TWD -> VND（使用當下匯率 VND/TWD）
+                    if (!rateUsed) amountVnd = NaN;
+                    else amountVnd = Math.round(amountOriginal / rateUsed);
+                } else {
+                    amountVnd = Math.round(amountOriginal);
+                }
+                const amount = amountVnd;
+
                 const category = categoryInput.value;
 
                 const note = noteInput ? String(noteInput.value || '').trim() : '';
@@ -3071,7 +3173,7 @@ if (exportPdfBtn) exportPdfBtn.addEventListener('click', exportReportPDF);
                 const payers = Array.from(document.querySelectorAll('.payer-checkbox:checked')).map(el => el.value);
 
                 if (!item || isNaN(amount) || amount <= 0) {
-                    alertModal("請輸入有效的品項名稱和越南盾金額。");
+                    alertModal("請輸入有效的品項名稱和金額。");
                     return;
                 }
 
@@ -3092,7 +3194,10 @@ if (exportPdfBtn) exportPdfBtn.addEventListener('click', exportReportPDF);
                 const newExpense = {
                     id: Date.now(),
                     item: item,
-                    krw: amount, // 保留原欄位名以兼容舊資料（此處代表 VND）
+                    krw: amount, // 內部統一存 VND（整數）
+                    currencyOriginal: currency,
+                    amountOriginal: Number.isFinite(amountOriginal) ? amountOriginal : null,
+                    rateUsed: rateUsed || null,
                     category: category,
                     consumers: consumersRaw,
                     payers: payers,
@@ -3831,6 +3936,1157 @@ if (exportPdfBtn) exportPdfBtn.addEventListener('click', exportReportPDF);
             // 備份 / 雲端同步（位於本頁）
             setupBackupCloudSyncListeners();
         }
+
+
+// ===============================
+// v21 PATCH: Embedded backup + Dual-currency settlement (VND/TWD)
+// ===============================
+
+// --- Embedded backup (safe-seed, never overwrite existing keys) ---
+const __EMBEDDED_BACKUP_B64 = "eyJWTl9UUklQX0FQUF9FWFBFTlNFUyI6IFtdLCAiVk5fVFJJUF9BUFBfQ0hFQ0tMSVNUIjogeyJ0b2RvIjogW3siaWQiOiAxMDEsICJ0ZXh0IjogIuaPm+i2iuWNl+ebviIsICJub3RlcyI6ICLnm67mqJnmj5sgMTAwIOiQrCBWTkQoxJEpIiwgImNoZWNrZWQiOiBmYWxzZSwgInBlcnNvbkNoZWNrcyI6IHsi5qyjIjogZmFsc2UsICLmuZgiOiBmYWxzZSwgIuePiCI6IGZhbHNlLCAi6Iq3IjogZmFsc2V9fSwgeyJpZCI6IDEwMiwgInRleHQiOiAi6Zu75a2Q57C96K2JIiwgIm5vdGVzIjogIumcgOWIl+WNsOS/neWtmCIsICJjaGVja2VkIjogZmFsc2UsICJwZXJzb25DaGVja3MiOiB7IuasoyI6IGZhbHNlLCAi5rmYIjogZmFsc2UsICLnj4giOiBmYWxzZSwgIuiKtyI6IGZhbHNlfX0sIHsiaWQiOiAxMDMsICJ0ZXh0IjogIuS/oeeUqOWNoemWi+mAmuWci+WkluS6pOaYkyIsICJub3RlcyI6ICIiLCAiY2hlY2tlZCI6IGZhbHNlLCAicGVyc29uQ2hlY2tzIjogeyLmrKMiOiBmYWxzZSwgIua5mCI6IGZhbHNlLCAi54+IIjogZmFsc2UsICLoirciOiBmYWxzZX19LCB7ImlkIjogMTA0LCAidGV4dCI6ICLoqILos7zmqZ/loLTmjqXpgIHmnI3li5kiLCAibm90ZXMiOiAi56K66KqN6LuK5Z6L6IiH5Lq65pW4IiwgImNoZWNrZWQiOiBmYWxzZSwgInBlcnNvbkNoZWNrcyI6IHsi5qyjIjogZmFsc2UsICLmuZgiOiBmYWxzZSwgIuePiCI6IGZhbHNlLCAi6Iq3IjogZmFsc2V9fV0sICJsdWdnYWdlIjogW3siaWQiOiAxLCAidGV4dCI6ICLorbfnhaciLCAibm90ZXMiOiAi56K66KqN5pWI5pyf5aSn5pa85YWt5YCL5pyIIiwgImNoZWNrZWQiOiBmYWxzZSwgInBlcnNvbkNoZWNrcyI6IHsi5qyjIjogZmFsc2UsICLmuZgiOiBmYWxzZSwgIuePiCI6IGZhbHNlLCAi6Iq3IjogZmFsc2V9fSwgeyJpZCI6IDIsICJ0ZXh0IjogImVzaW0gKOaIluWvpumrlCBTSU0g5Y2hKSIsICJub3RlcyI6ICLlh7rnmbzliY3plovpgJoiLCAiY2hlY2tlZCI6IGZhbHNlLCAicGVyc29uQ2hlY2tzIjogeyLmrKMiOiBmYWxzZSwgIua5mCI6IGZhbHNlLCAi54+IIjogZmFsc2UsICLoirciOiBmYWxzZX19LCB7ImlkIjogMywgInRleHQiOiAi5Y+w5bmjICjnlKjmlrzmj5votorljZfnm74pIiwgIm5vdGVzIjogIuaPm+mMouaJgOWPquaUtuWkp+mIlCIsICJjaGVja2VkIjogZmFsc2UsICJwZXJzb25DaGVja3MiOiB7IuasoyI6IGZhbHNlLCAi5rmYIjogZmFsc2UsICLnj4giOiBmYWxzZSwgIuiKtyI6IGZhbHNlfX0sIHsiaWQiOiA3LCAidGV4dCI6ICLml4XpgYrluLjlgpnol6UgKOaEn+WGkuOAgeiFuOiDg+iXpSkiLCAibm90ZXMiOiAiIiwgImNoZWNrZWQiOiBmYWxzZSwgInBlcnNvbkNoZWNrcyI6IHsi5qyjIjogZmFsc2UsICLmuZgiOiBmYWxzZSwgIuePiCI6IGZhbHNlLCAi6Iq3IjogZmFsc2V9fSwgeyJpZCI6IDgsICJ0ZXh0IjogIuS/neWBpemjn+WTgSIsICJub3RlcyI6ICIiLCAiY2hlY2tlZCI6IGZhbHNlLCAicGVyc29uQ2hlY2tzIjogeyLmrKMiOiBmYWxzZSwgIua5mCI6IGZhbHNlLCAi54+IIjogZmFsc2UsICLoirciOiBmYWxzZX19LCB7ImlkIjogOSwgInRleHQiOiAi5YCL5Lq655ul5rSX55So5ZOBIiwgIm5vdGVzIjogIiIsICJjaGVja2VkIjogZmFsc2UsICJwZXJzb25DaGVja3MiOiB7IuasoyI6IGZhbHNlLCAi5rmYIjogZmFsc2UsICLnj4giOiBmYWxzZSwgIuiKtyI6IGZhbHNlfX0sIHsiaWQiOiAxMCwgInRleHQiOiAi5YyW5aad5ZOBLCDkv53ppIrlk4EsIOWNuOWmnSIsICJub3RlcyI6ICIiLCAiY2hlY2tlZCI6IGZhbHNlLCAicGVyc29uQ2hlY2tzIjogeyLmrKMiOiBmYWxzZSwgIua5mCI6IGZhbHNlLCAi54+IIjogZmFsc2UsICLoirciOiBmYWxzZX19LCB7ImlkIjogMTEsICJ0ZXh0IjogIuS/nemaqiIsICJub3RlcyI6ICIiLCAiY2hlY2tlZCI6IGZhbHNlLCAicGVyc29uQ2hlY2tzIjogeyLmrKMiOiBmYWxzZSwgIua5mCI6IGZhbHNlLCAi54+IIjogZmFsc2UsICLoirciOiBmYWxzZX19XX0sICJWTl9UUklQX0FQUF9NRU1PX0lORk8iOiAiwrfkvb/nlKjmiYvmqZ8o55uh6YeP55So5o6b57mpKeS4jeimgeato+WwjemmrOi3r++8jeWwj+W/g+mjm+i7ium7qFxuwrfooZfpgormk6bpnovnq6XvvIzpnovooqvnorDliLDlsLHmnIPopoHku5josrvvvI3lv6vot5FcbsK35pCt6KiI56iL6LuK5LiN6KaB6K6T5Y+45qmf55u05o6l5ou/6Yyi5bmr566X77yM5pyD6KKr5YG35YG35oq96LWw77yN5b6M5bqn6LKg6LKs5ou/6YyiXG7Ct+mkkOW7s+eahOa/lee0meW3vuimgeWPpuWkluaUtuiyuyIsICJWTl9UUklQX0FQUF9UUklQX0RBVEEiOiB7ImZsaWdodHMiOiAi5Y6756iL77ya5Y6756iL77yI5Ye655m877yJPGJyPuePiCbmuZjvvJrpq5jpm4Qg4oaS6IOh5b+X5piO77yI6LaK5Y2X6Iiq56m6IFZOIDU4Me+8iTA3OjMw4oCTMDk6MzA8YnI+5qyjJuiKt++8muahg+WckiDihpLog6Hlv5fmmI7vvIjmmJ/lrofoiKrnqbogSlggNzEx77yJMDc6NDDigJMxMDozMO+8m+Wbnueoi++8muWbnueoi++8iOi/lOeoi++8iTxicj7lhajpq5TvvJrog6Hlv5fmmI7ihpLmoYPlnJLvvIjplbfmpq7oiKrnqbogQlIgMzgy77yJMDE6NTXigJMwNjoxMCIsICJpdGluZXJhcnkiOiBbeyJkYXRlIjogIkRheTEtMS8yNCjlha0pIiwgIml0ZW1zIjogW3sibmFtZSI6ICLmlrDlsbHkuIDmqZ/loLTvvI3vvJ7kvY/lrr/pu54iLCAidGltZSI6ICIxMjowMCIsICJ0eXBlIjogIlRyYXZlbCIsICJub3RlcyI6ICLmkK3ou4rjgIBjaGVjayBpbjoxNDowMO+8jOWPr+WvhOaUvuihjOadjiJ9LCB7ImxpbmsiOiAiaHR0cHM6Ly9tYXBzLmFwcC5nb28uZ2wvNEdDRWZOZlRTTjc3eVNtUjkiLCAibmFtZSI6ICJIYSBUYW0gSmV3ZWxyeeOAgOaPm+WMryIsICJ0aW1lIjogIjEzOjAwIiwgInR5cGUiOiAiQWN0aXZpdHkiLCAiaG91cnMiOiAiMDg6MDDigJMxOTowMCIsICJub3RlcyI6ICLlsI3pnaLkuZ/lj6/mj5vjgIDnhKHlkYrnpLrniYzvvIzpgLLljrvmiY3nn6XpgZPjgIDluaPntJnnm6Hph4/kuI3opoHnoLTmkI3jgIDlpKrlsI/pnaLpoY3kuI3mj5siLCAiYWRkcmVzc19jb3B5IjogIjIgTmd1eeG7hW4gQW4gTmluaCwgUGjGsOG7nW5nIELhur9uIFRow6BuaCwgUXXhuq1uIDEsIFRow6BuaCBwaOG7kSBI4buTIENow60gTWluaCwg6LaK5Y2XIn0sIHsibGluayI6ICJodHRwczovL21hcHMuYXBwLmdvby5nbC9jb3FXdkdkaGdMZW9xWHNhOCIsICJuYW1lIjogIkLhur9wIE3hurkg4buIbuiDluWqveW7muaIvyIsICJ0aW1lIjogIuWNiOmkkCIsICJ0eXBlIjogIkFjdGl2aXR5IiwgImhvdXJzIjogIjEwOjMw4oCTMjI6MzAiLCAibm90ZXMiOiAi57Gz5YW25p6X6aSQ5buz77yM5bCP5b+D5pyJbG9nb+ebuOS8vOeahCDlj6/lhYjoqILkvY0iLCAiYmdDb2xvciI6ICIjRkZGOUU2IiwgImFkZHJlc3NfY29weSI6ICIxMzYvOSBMw6ogVGjDoW5oIFTDtG4sIFBoxrDhu51uZyBC4bq/biBUaMOgbmgsIFF14bqtbiAxLCBUaMOgbmggcGjhu5EgSOG7kyBDaMOtIE1pbmgsIOi2iuWNlyJ9LCB7ImxpbmsiOiAiaHR0cHM6Ly9tYXBzLmFwcC5nb28uZ2wvbjJCdXV5Z1huaTliTlNNQjgiLCAibmFtZSI6ICLmv7Hln47luILloLQgQ2jhu6MgQuG6v24gVGjDoG5oIiwgInRpbWUiOiAiMTU6MDAiLCAidHlwZSI6ICJBY3Rpdml0eSIsICJub3RlcyI6ICLop4DlhYnlrqLluILloLQg6KaB5q665YO5ISHvvIjntrLot6/mjqjolqY5NDnmlKTkvY3nmoTpmL/lp6jvvIkiLCAiYWRkcmVzc19jb3B5IjogIkJlbiBUaGFuaCwgRGlzdHJpY3QgMSwgSG8gQ2hpIE1pbmggQ2l0eSwg6LaK5Y2XIn0sIHsibGluayI6ICJodHRwczovL21hcHMuYXBwLmdvby5nbC81ZTRvcEEydllEb1VnNUE4NiIsICJuYW1lIjogIkxpdHRsZSBIYU5vaSBFZ2cgQ29mZmVlIiwgInRpbWUiOiAiMTY6MDAiLCAidHlwZSI6ICJBY3Rpdml0eSIsICJub3RlcyI6ICLoipLmnpzpm57om4vlkJDlj7giLCAiYmdDb2xvciI6ICIjRkZGOUU2IiwgImFkZHJlc3NfY29weSI6ICIxMTkvNSBZZXJzaW4sIFBoxrDhu51uZyBQaOG6oW0gTmfFqSBMw6NvLCBRdeG6rW4gMSwgVGjDoG5oIHBo4buRIEjhu5MgQ2jDrSBNaW5oLCDotorljZcifSwgeyJsaW5rIjogImh0dHBzOi8vbWFwcy5hcHAuZ29vLmdsL2NpbmRnNDNhaEE5ZUVScWo5IiwgIm5hbWUiOiAi5Ly05omL56auLei2heW4gkNPIE9QIE1hcnQiLCAidGltZSI6ICLmmZrkuIoiLCAidHlwZSI6ICJBY3Rpdml0eSIsICJub3RlcyI6ICLlubPlg7kg5Zyo5Zyw6LaF5biCIiwgImFkZHJlc3NfY29weSI6ICIxODlDIMSQLiBD4buRbmcgUXXhu7NuaCwgUGjGsOG7nW5nIE5ndXnhu4VuIEPGsCBUcmluaCwgUXXhuq1uIDEsIFRow6BuaCBwaOG7kSBI4buTIENow60gTWluaCA3MDAwMDDotorljZcifSwgeyJuYW1lIjogIuS8tOaJi+emri3otoXluIJMb3R0ZSBNYXJ0IiwgInRpbWUiOiAi5pma5LiKIiwgInR5cGUiOiAiQWN0aXZpdHkiLCAibm90ZXMiOiAi5aSn5Y+I6b2K5YWoIOe8uum7njrpgaAifSwgeyJsaW5rIjogImh0dHBzOi8vbWFwcy5hcHAuZ29vLmdsL1ROSlVuUXJFa2t5UWNvR2Y5IiwgIm5hbWUiOiAi5Ly05omL56auQW5uYW0gR291cm1ldCIsICJ0aW1lIjogIuaZmuS4iiIsICJ0eXBlIjogIkFjdGl2aXR5IiwgIm5vdGVzIjogIumjr+W6l+aWnOWwjemdoiDotorljZfosrTlqabotoXluIIg6YCy5Y+j44CB6LK0IiwgImFkZHJlc3NfY29weSI6ICIxNi0xOCBIYWkgQsOgIFRyxrBuZywgUGjGsOG7nW5nIELhur9uIE5naMOpLCBRdeG6rW4gMSwgVGjDoG5oIHBo4buRIEjhu5MgQ2jDrSBNaW5oIDcwMDAw6LaK5Y2XIn1dfSwgeyJkYXRlIjogIkRheTItMS8yNSjml6UpIiwgIml0ZW1zIjogW3sibGluayI6ICJodHRwczovL21hcHMuYXBwLmdvby5nbC9td0FmZ3B1bUpaZllORWZYNiIsICJuYW1lIjogIkLDoW5oIE3DrCBIdXluaCBIb2Hms5XlnIvpurXljIUiLCAidGltZSI6ICIxMjowMCIsICJ0eXBlIjogIkFjdGl2aXR5IiwgImhvdXJzIjogIjA2OjAw4oCTMjI6MDAiLCAiYmdDb2xvciI6ICIjRkZGOUU2In0sIHsibmFtZSI6ICLlpKflrbjnlJ/lsI7opr0iLCAidGltZSI6ICIxNzowMCIsICJ0eXBlIjogIkFjdGl2aXR5In0sIHsibGluayI6ICJodHRwczovL21hcHMuYXBwLmdvby5nbC9SNXRVUzdqbkJIVm9RM3pGNz9nX3N0PWlwYyIsICJuYW1lIjogIueyiee0heaVmeWggiIsICJ0aW1lIjogIjA5OjAwIiwgInR5cGUiOiAiQWN0aXZpdHkiLCAiaG91cnMiOiAiMDg6MDAtMTE6MDAiLCAibm90ZXMiOiAi5bCN6Z2i55qE5ZKW5ZWh5buz5LqM5qiT5Y+v5Lul5ouN5Yiw5aW955yL55qE54Wn54mHIn1dfSwgeyJkYXRlIjogIkRheTMtMS8yNijkuIApIiwgIml0ZW1zIjogW3sibGluayI6ICJodHRwczovL21hcHMuYXBwLmdvby5nbC82TktjdlE4cVhCQ0dkeFJQNiIsICJuYW1lIjogIuWIsOapn+WgtCIsICJ0aW1lIjogIjIyOjAwIiwgInR5cGUiOiAiQWN0aXZpdHkifV19LCB7ImRhdGUiOiAiRGF5NC0xLzI3KOS6jCkiLCAiaXRlbXMiOiBbeyJuYW1lIjogIumjm+iIqiIsICJ0aW1lIjogIjE6NTUtNjoxMCIsICJ0eXBlIjogIkFjdGl2aXR5In1dfV0sICJndWlkZV9zcG90cyI6IFt7Im1hcCI6IHsibGF0IjogMzcuNTgsICJsbmciOiAxMjYuOTh9LCAibmFtZSI6ICLmma/npo/lrq4iLCAiaW50cm8iOiAi5pmv56aP5a6u5piv5pyd6a6u546L5pyd77yIMTM5Mi0xODk35bm077yJ55qE5q2j5a6u77yM5oSP54K644CM5aSn5ZCJ5aSn5Yip44CB56aP56W/57a/6ZW344CN44CC5a6D5bu65pa8MTM5NeW5tO+8jOaYr+mfk+Wci+S6lOWkp+Wuruq2kOS4reimj+aooeacgOWkp+OAgeW7uuevieioreioiOacgOeyvue+jueahOOAguacgOiRl+WQjeeahOWLpOaUv+auv+aYr+eUqOaWvOWci+WutuWEgOW8j+WSjOaOpeimi+WkluWci+S9v+evgOeahOWcsOaWue+8jOiAjOmmmemBoOS6reWJh+aYr+a5lueVlOeahOWEque+juS6remWo+OAguWGt+efpeitmO+8muWcqOaXpeayu+aZguacn++8jOWuruauv+eahOWkp+mDqOWIhuiiq+avgOaQje+8jOePvuS7iuaJgOimi+aYr+WkmuW5tOS+huS/ruW+qeeahOe1kOaenO+8jOmrlOePvuS6humfk+Wci+Wwjeatt+WPsueahOWgheWuiOiIh+W+qeiIiOOAgiJ9LCB7Im1hcCI6IHsibGF0IjogMzcuOTMsICJsbmciOiAxMjYuN30sICJuYW1lIjogIkRNWiDpnZ7ou43kuovljYAiLCAiaW50cm8iOiAiRE1a77yIRGVtaWxpdGFyaXplZCBab25l77yJ5piv5YiG6ZqU5Y2X5YyX6Z+T55qE57ep6KGd5Y2A77yM6ZW357SEMjUw5YWs6YeM77yM5a+s57SENOWFrOmHjOOAgumblueEtuWQjeeCuumdnui7jeS6i+WNgO+8jOS9huWug+aYr+S4lueVjOS4iui7jeS6i+WMlueoi+W6puacgOmrmOeahOWcsOWNgOS5i+S4gOOAgumAmeijj+WQjOaZguS5n+aYr+S4gOWAi+eUn+aFi+WkqeWggu+8jOWboOeCuuS6uumhnua0u+WLleeahOmZkOWItu+8jOaIkOeCuuS6huioseWkmuePjeeogOmHjueUn+WLleakjeeJqeeahOajsuaBr+WcsOOAguWPg+ingOihjOeoi+mAmuW4uOWMheaLrOadv+mWgOW6l+OAgeesrOS4ieWcsOmBk+WSjOmDvee+heWxleacm+WPsOOAguWGt+efpeitmO+8mkRNWiDlhafpg6jmnInkuIDlgIvlkI3ngrrjgIzlkozlubPkuYvmnZHjgI3vvIjlpKfmiJDmtJ7vvInnmoTmnZHojorvvIzmmK/llK/kuIDlhYHoqLHlubPmsJHlsYXkvY/lnKhETVrlhafnmoTnibnkvovjgIIifV0sICJmbGlnaHRzX25vdGUiOiAi5Y6756iL6KuL5pa86LW36aOb5YmN5o+Q5pep5Yiw5qmf5aC05a6M5oiQ5aCx5Yiw77yb5Zue56iL54K65YeM5pmoIDAxOjU1IOi1t+mjm++8jOW7uuitsOWJjeS4gOaZmuaPkOaXqeaVtOeQhuihjOadjuS4pumgkOeVmeWJjeW+gOapn+WgtOaZgumWk+OAgiIsICJhY2NvbW1vZGF0aW9uIjogW3siZGF0ZSI6ICIxLzI0LTEvMjYiLCAibmFtZSI6ICJLSU4gSE9URUwgRE9ORyBEVSIsICJwaG9uZSI6ICIoMDI4KSAzNTM1IDQzNDIiLCAiYWRkcmVzcyI6ICIxOeKAkjIxIERvbmcgRHUgU3RyZWV0LCBTYWkgR29uIFdhcmQsIEhvIENoaSBNaW5oIENpdHkiLCAibWFwTGluayI6ICJodHRwczovL21hcHMuYXBwLmdvby5nbC95d3VFdjROZDc4WWk3RkhIOSIsICJhZGRyZXNzX2NvcHkiOiAiMTnigJIyMSBEb25nIER1IFN0cmVldCwgU2FpIEdvbiBXYXJkLCBIbyBDaGkgTWluaCBDaXR5In1dfSwgIlZOX1RSSVBfQVBQX1JBVEVfUkVDT1JEX05PVEUiOiAi6LaK5bmj566X5rOVOuaJo+aOieW+jOmdojPlgIsw77yM5Ymp5LiL5pW45a2X77yKMS4zXG7ph5Hpo77lupdIYSBUYW0gSmV3ZWxyeToyIE5ndXnhu4VuIEFuIE5pbmgsIFBoxrDhu51uZyBC4bq/biBUaMOgbmgsIFF14bqtbiAxICjmqrPln47luILloLTlvozploDlsI3pnaIpXG5NQUkgVkFO77yI5LiK5LiA5a625bCN6Z2i77yM5Yyv546H56iN5beu5Y+v5o6l5Y+X77yf77yJIiwgIlZOX1RSSVBfQVBQX1NFVFRMRU1FTlRfU1RBVEUiOiB7ImRheXMiOiB7IjEvMjQiOiB7ImxpbmVzIjogeyLmrKMtPuePiCI6IDUwLCAi54+ILT7mrKMiOiA1MCwgIuePiC0+6Iq3IjogMjUwfSwgInVwZGF0ZWRBdCI6ICIyMDI1LTEyLTE3VDE3OjA1OjE4LjUyNloifSwgIuWFtuS7liI6IHsibGluZXMiOiB7Iua5mC0+5qyjIjogMTY2LCAi54+ILT7mrKMiOiAxNjd9LCAidXBkYXRlZEF0IjogIjIwMjUtMTItMTdUMTc6MDg6MzIuMTQ3WiJ9fSwgInRyaXAiOiB7fX19";
+function __decodeEmbeddedBackup() {
+  try {
+    const txt = atob(__EMBEDDED_BACKUP_B64);
+    return JSON.parse(txt);
+  } catch (e) {
+    console.warn("[EmbeddedBackup] decode failed:", e);
+    return null;
+  }
+}
+function applyEmbeddedBackupSafely() {
+  try {
+    const data = __decodeEmbeddedBackup();
+    if (!data || typeof data !== "object") return false;
+    let changed = false;
+    for (const k of Object.keys(data)) {
+      if (localStorage.getItem(k) === null) {
+        setLocalStorage(k, data[k]);
+        changed = true;
+      }
+    }
+    return changed;
+  } catch (e) {
+    console.warn("[EmbeddedBackup] apply failed:", e);
+    return false;
+  }
+}
+
+// --- v21: normalize/migrate expenses schema (keep backward compatibility) ---
+// New canonical fields: amount(int), currency('VND'|'TWD'), rateUsed(number|null)
+function normalizeExpenseV21(e) {
+  if (!e || typeof e !== "object") return null;
+  const out = { ...e };
+  // Determine currency
+  const cur = String(out.currency || out.currencyOriginal || "VND").toUpperCase();
+  out.currency = (cur === "TWD") ? "TWD" : "VND";
+
+  // Determine amount
+  // v20 schema: krw (stored VND int), currencyOriginal, amountOriginal
+  // v19/older: krw only
+  let amt = null;
+  if (Number.isFinite(Number(out.amount))) {
+    amt = Math.trunc(Number(out.amount));
+  } else if (out.currency === "TWD") {
+    // prefer original amount if exists
+    if (Number.isFinite(Number(out.amountOriginal))) amt = Math.trunc(Number(out.amountOriginal));
+    else if (Number.isFinite(Number(out.krw))) {
+      // legacy: stored VND but currencyOriginal said TWD (old conversion) → best-effort:
+      // convert back using rateUsed/currentRate to estimate TWD; keep integer.
+      const r = Number(out.rateUsed) || Number(getLocalStorage(exchangeRateKey, currentRate)) || Number(currentRate) || 0;
+      amt = r ? Math.trunc(Number(out.krw) * r) : Math.trunc(Number(out.krw));
+    }
+  } else {
+    // VND
+    if (Number.isFinite(Number(out.krw))) amt = Math.trunc(Number(out.krw));
+    else if (Number.isFinite(Number(out.amountOriginal))) amt = Math.trunc(Number(out.amountOriginal));
+  }
+  out.amount = Math.max(0, Math.trunc(Number(amt || 0)));
+
+  // Lock rate per entry (keep existing, otherwise set null)
+  out.rateUsed = (out.rateUsed === null || out.rateUsed === undefined || out.rateUsed === "") ? null : Number(out.rateUsed);
+
+  // Normalize arrays
+  out.consumers = Array.isArray(out.consumers) ? out.consumers : [];
+  out.payers = Array.isArray(out.payers) ? out.payers : [];
+
+  // Keep legacy fields for compatibility, but don't rely on them:
+  // out.krw, out.currencyOriginal, out.amountOriginal remain untouched.
+  return out;
+}
+
+function normalizeAllExpensesV21() {
+  const raw = getLocalStorage(expensesKey, []);
+  const list = Array.isArray(raw) ? raw.map(normalizeExpenseV21).filter(Boolean) : [];
+  // If any item lacks spentAt but has timestamp, try to build spentAt
+  let changed = false;
+  for (const e of list) {
+    if (!e.spentAt) {
+      try {
+        const d = e.timestamp ? new Date(e.timestamp) : new Date();
+        const pad = (n) => String(n).padStart(2, "0");
+        e.spentAt = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        changed = true;
+      } catch (_) {}
+    }
+    // Ensure id
+    if (!e.id) {
+      e.id = Date.now() + Math.floor(Math.random() * 1000);
+      changed = true;
+    }
+  }
+  // Persist normalized list only if it looks different shape-wise
+  // (Safe: it keeps original fields)
+  try {
+    setLocalStorage(expensesKey, list);
+  } catch (_) {}
+  return list;
+}
+
+// --- v21: Currency-aware settlement state ---
+// Store format:
+// settlementState = { days: {[dayKey]: { linesByCur: {VND: {k:true}, TWD: {k:true}} } }, trip: { linesByCur: {VND:{}, TWD:{}} } }
+function _getSettlementStateV21() {
+  const defVal = { days: {}, trip: {} };
+  const s = getLocalStorage(settlementStateKey, defVal);
+  const out = (s && typeof s === "object") ? s : { ...defVal };
+  if (!out.days || typeof out.days !== "object") out.days = {};
+  if (!out.trip || typeof out.trip !== "object") out.trip = {};
+
+  // migrate legacy: days[dayKey].lines (amount map) -> linesByCur.TWD (best-effort)
+  let migrated = false;
+  for (const dk of Object.keys(out.days)) {
+    const d = out.days[dk] || {};
+    if (!d.linesByCur || typeof d.linesByCur !== "object") {
+      d.linesByCur = { VND: {}, TWD: {} };
+      migrated = true;
+    }
+    if (d.lines && typeof d.lines === "object" && Object.keys(d.lines).length) {
+      // legacy stored amounts; convert to paid keys as true in TWD
+      const legacy = d.lines;
+      for (const lk of Object.keys(legacy)) {
+        const amt = Math.max(0, Math.trunc(Number(legacy[lk] || 0)));
+        // legacy key was "A->B"
+        const key = `${lk}->${amt}`;
+        d.linesByCur.TWD[key] = true;
+      }
+      delete d.lines;
+      migrated = true;
+    }
+    out.days[dk] = d;
+  }
+  if (!out.trip.linesByCur || typeof out.trip.linesByCur !== "object") {
+    out.trip.linesByCur = { VND: {}, TWD: {} };
+    migrated = true;
+  }
+  if (migrated) {
+    setLocalStorage(settlementStateKey, out);
+  }
+  return out;
+}
+
+function _setSettlementStateV21(s) {
+  setLocalStorage(settlementStateKey, s);
+}
+
+function getDayPaidMap(dayKey, currency = "VND") {
+  const dk = String(dayKey || "其他");
+  const cur = (String(currency || "VND").toUpperCase() === "TWD") ? "TWD" : "VND";
+  const s = _getSettlementStateV21();
+  const d = s.days[dk] || {};
+  const byCur = (d.linesByCur && typeof d.linesByCur === "object") ? d.linesByCur : { VND: {}, TWD: {} };
+  const lines = (byCur[cur] && typeof byCur[cur] === "object") ? byCur[cur] : {};
+  return { lines };
+}
+
+function _setDayPaidLines(dayKey, currency, linesObj) {
+  const dk = String(dayKey || "其他");
+  const cur = (String(currency || "VND").toUpperCase() === "TWD") ? "TWD" : "VND";
+  const s = _getSettlementStateV21();
+  if (!s.days) s.days = {};
+  const d = s.days[dk] || {};
+  if (!d.linesByCur || typeof d.linesByCur !== "object") d.linesByCur = { VND: {}, TWD: {} };
+  d.linesByCur[cur] = (linesObj && typeof linesObj === "object") ? linesObj : {};
+  d.updatedAt = new Date().toISOString();
+  s.days[dk] = d;
+  _setSettlementStateV21(s);
+}
+
+function clearDaySettlement(dayKey, currency = "VND") {
+  _setDayPaidLines(dayKey, currency, {});
+}
+
+// Toggle settlement line: stored as boolean key "from->to->amount".
+// When checked: true; when unchecked: remove (with confirm).
+function toggleSettleLine(dayKey, currency, from, to, total) {
+  const dk = String(dayKey || "其他");
+  const cur = (String(currency || "VND").toUpperCase() === "TWD") ? "TWD" : "VND";
+  const t = Math.max(0, Math.trunc(Number(total || 0)));
+  const key = `${from}->${to}->${t}`;
+
+  const curState = getDayPaidMap(dk, cur);
+  const lines = (curState && curState.lines) ? curState.lines : {};
+  const isOn = !!lines[key];
+
+  if (isOn) {
+    if (!confirm("取消這筆結清會影響結清結果，確定要改回未結清嗎？")) return;
+    const nl = { ...lines };
+    delete nl[key];
+    _setDayPaidLines(dk, cur, nl);
+  } else {
+    if (t <= 0) return;
+    const nl = { ...lines, [key]: true };
+    _setDayPaidLines(dk, cur, nl);
+  }
+
+  try { if (typeof renderExpenseList === "function") renderExpenseList(); } catch (e) {}
+}
+
+window.getDayPaidMap = getDayPaidMap;
+window.toggleSettleLine = toggleSettleLine;
+window.clearDaySettlement = clearDaySettlement;
+
+// --- v21: core helpers for split & settlement ---
+const V21_PEOPLE = ["欣","珈","芷","湘"];
+function _v21SafeInt(v, fb=0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : fb;
+}
+function _v21HashToIndex(str, mod) {
+  const s = String(str ?? "");
+  let h = 2166136261;
+  for (let i=0;i<s.length;i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const x = (h >>> 0);
+  if (!mod || mod <= 0) return x;
+  return x % mod;
+}
+function splitIntegerFairV21(total, people, seed="") {
+  const list = Array.isArray(people) ? people.filter(Boolean) : [];
+  const n = list.length;
+  const out = {};
+  if (!n) return out;
+  const t = Math.max(0, _v21SafeInt(total, 0));
+  const base = Math.floor(t / n);
+  let rem = t - base * n;
+  list.forEach(p => out[p] = base);
+  if (rem <= 0) return out;
+  const start = _v21HashToIndex(seed, n);
+  for (let i=0;i<rem;i++) {
+    const p = list[(start + i) % n];
+    out[p] = (out[p] || 0) + 1;
+  }
+  return out;
+}
+function normalizeConsumersV21(raw) {
+  const arr = Array.isArray(raw) ? raw : [];
+  if (arr.includes("全體")) return V21_PEOPLE.slice();
+  return V21_PEOPLE.filter(p => arr.includes(p));
+}
+function normalizePayersV21(raw) {
+  const arr = Array.isArray(raw) ? raw : [];
+  if (arr.includes("各自")) return ["各自"];
+  return V21_PEOPLE.filter(p => arr.includes(p));
+}
+function isManualSettledV21(exp) {
+  if (!exp) return false;
+  if (!exp.isSettled) return false;
+  const by = exp.settledBy ? String(exp.settledBy) : "";
+  return (by === "" || by === "manual");
+}
+
+function computeNetPairsByCurrency(expenses, dayKey, currency) {
+  const cur = (String(currency || "VND").toUpperCase() === "TWD") ? "TWD" : "VND";
+  const list = Array.isArray(expenses) ? expenses : [];
+  const bal = {};
+  V21_PEOPLE.forEach(p => bal[p] = 0);
+
+  // build balances
+  for (const raw of list) {
+    const exp = normalizeExpenseV21(raw);
+    if (!exp) continue;
+    if (String(exp.currency || "VND").toUpperCase() !== cur) continue;
+    if (isManualSettledV21(exp)) continue;
+
+    const payers = normalizePayersV21(exp.payers);
+    if (payers.includes("各自")) continue;
+
+    const consumers = normalizeConsumersV21(exp.consumers);
+    if (!consumers.length) continue;
+    if (!payers.length) continue;
+
+    const total = Math.max(0, _v21SafeInt(exp.amount, 0));
+    if (!total) continue;
+
+    const consShare = splitIntegerFairV21(total, consumers, `cons|${exp.id}|${exp.spentAt||""}|${cur}`);
+    const payShare  = splitIntegerFairV21(total, payers,   `pay|${exp.id}|${exp.spentAt||""}|${cur}`);
+
+    for (const p of payers) bal[p] += _v21SafeInt(payShare[p], 0);
+    for (const c of consumers) bal[c] -= _v21SafeInt(consShare[c], 0);
+  }
+
+  const creditors = [];
+  const debtors = [];
+  for (const p of V21_PEOPLE) {
+    const v = _v21SafeInt(bal[p], 0);
+    if (v > 0) creditors.push({ person: p, amt: v });
+    else if (v < 0) debtors.push({ person: p, amt: -v });
+  }
+  // deterministic order
+  creditors.sort((a,b)=> V21_PEOPLE.indexOf(a.person)-V21_PEOPLE.indexOf(b.person));
+  debtors.sort((a,b)=> V21_PEOPLE.indexOf(a.person)-V21_PEOPLE.indexOf(b.person));
+
+  const lines = [];
+  let i=0, j=0;
+  while (i < debtors.length && j < creditors.length) {
+    const d = debtors[i];
+    const c = creditors[j];
+    const x = Math.min(d.amt, c.amt);
+    if (x > 0) lines.push({ from: d.person, to: c.person, total: x });
+    d.amt -= x;
+    c.amt -= x;
+    if (d.amt === 0) i++;
+    if (c.amt === 0) j++;
+  }
+
+  // apply paid map
+  const dk = String(dayKey || "其他");
+  const paidMap = getDayPaidMap(dk, cur).lines || {};
+  const netLines = lines.map(x => {
+    const key = `${x.from}->${x.to}->${x.total}`;
+    const paid = paidMap[key] ? x.total : 0;
+    return { ...x, paid, remaining: x.total - paid };
+  });
+
+  // sort: receiver first, then payer
+  netLines.sort((a,b)=>
+    (V21_PEOPLE.indexOf(a.to)-V21_PEOPLE.indexOf(b.to)) ||
+    (V21_PEOPLE.indexOf(a.from)-V21_PEOPLE.indexOf(b.from))
+  );
+
+  return netLines;
+}
+
+function formatCurrencyAmount(cur, amt) {
+  const n = Math.max(0, _v21SafeInt(amt, 0));
+  if (cur === "TWD") return `${TWD_SYMBOL} ${n.toLocaleString()}`;
+  return `${n.toLocaleString()} VND(đ)`;
+}
+
+// --- v21: override loadInitialData to seed embedded backup safely ---
+function loadInitialData() {
+  // 1) Seed missing keys from embedded backup (never overwrite)
+  applyEmbeddedBackupSafely();
+
+  // 2) Load rate
+  currentRate = getLocalStorage(exchangeRateKey, 0.024);
+  updateRateDisplay();
+
+  // 3) Load trip data
+  tripData = getLocalStorage(tripDataKey, initialTripData);
+
+  // 4) Normalize expenses schema
+  normalizeAllExpensesV21();
+}
+
+// --- v21: override setupWalletListeners (store dual-currency, lock rate per entry; no conversion) ---
+function setupWalletListeners() {
+  const photoInput = document.getElementById("expense-photo");
+  let base64Photo = null;
+  const expenseTimeInput = document.getElementById("expense-time");
+
+  const setExpenseTimeNow = () => {
+    if (!expenseTimeInput) return;
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    expenseTimeInput.value = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  };
+  setExpenseTimeNow();
+
+  // Mutual exclusivity
+  document.querySelectorAll(".consume-checkbox").forEach(cb => {
+    cb.addEventListener("change", (e) => {
+      const v = e.target.value;
+      if (v === "全體" && e.target.checked) {
+        document.querySelectorAll(".consume-checkbox").forEach(x => { if (x.value !== "全體") x.checked = false; });
+      } else if (v !== "全體" && e.target.checked) {
+        const all = document.querySelector('.consume-checkbox[value="全體"]');
+        if (all) all.checked = false;
+      }
+    });
+  });
+  document.querySelectorAll(".payer-checkbox").forEach(cb => {
+    cb.addEventListener("change", (e) => {
+      const v = e.target.value;
+      if (v === "各自" && e.target.checked) {
+        document.querySelectorAll(".payer-checkbox").forEach(x => { if (x.value !== "各自") x.checked = false; });
+      } else if (v !== "各自" && e.target.checked) {
+        const self = document.querySelector('.payer-checkbox[value="各自"]');
+        if (self) self.checked = false;
+      }
+    });
+  });
+
+  // Export report
+  const exportCsvBtn = document.getElementById("export-csv-btn");
+  if (exportCsvBtn) exportCsvBtn.addEventListener("click", exportReportCSV);
+  const exportPdfBtn = document.getElementById("export-pdf-btn");
+  if (exportPdfBtn) exportPdfBtn.addEventListener("click", exportReportPDF);
+
+  if (photoInput) {
+    photoInput.addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        compressImage(file, (dataURL) => {
+          base64Photo = dataURL;
+          const preview = document.getElementById("photo-preview");
+          if (preview) preview.innerHTML = `<img src="${dataURL}" class="w-20 h-20 object-cover mx-auto rounded-md mt-2 border" style="border-color: var(--color-divider);">`;
+        });
+      }
+    });
+  }
+
+  // Currency placeholder
+  const amountInput = document.getElementById("expense-krw");
+  const currencyInput = document.getElementById("expense-currency");
+  if (currencyInput && amountInput) {
+    const syncPh = () => {
+      const cur = String(currencyInput.value || "VND");
+      amountInput.placeholder = (cur === "TWD") ? "台幣金額 TWD" : "越南盾金額 VND(đ)";
+    };
+    currencyInput.addEventListener("change", syncPh);
+    syncPh();
+  }
+
+  const addBtn = document.getElementById("add-expense-btn");
+  if (!addBtn) return;
+
+  addBtn.addEventListener("click", () => {
+    const itemInput = document.getElementById("expense-item");
+    const amountInput = document.getElementById("expense-krw");
+    const categoryInput = document.getElementById("expense-category");
+    const timeInput = document.getElementById("expense-time");
+    const noteInput = document.getElementById("expense-note");
+
+    const item = itemInput ? String(itemInput.value || "").trim() : "";
+    const currencySel = document.getElementById("expense-currency");
+    const currency = currencySel ? String(currencySel.value || "VND").toUpperCase() : "VND";
+    const amount = Math.max(0, Math.trunc(Number(amountInput ? amountInput.value : 0)));
+    const category = categoryInput ? String(categoryInput.value || "Other") : "Other";
+    const note = noteInput ? String(noteInput.value || "").trim() : "";
+
+    const consumersRaw = Array.from(document.querySelectorAll(".consume-checkbox:checked")).map(el => el.value);
+    const payers = Array.from(document.querySelectorAll(".payer-checkbox:checked")).map(el => el.value);
+
+    if (!item || !Number.isFinite(amount) || amount <= 0) {
+      alertModal("請輸入有效的品項名稱和金額。");
+      return;
+    }
+    if (!consumersRaw.length) {
+      alertModal("請至少勾選一位「誰消費」。若為大家一起吃，請勾選「全體」。");
+      return;
+    }
+
+    // spentAt
+    let spentAt = (timeInput && timeInput.value) ? String(timeInput.value) : "";
+    if (!spentAt) {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      spentAt = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    }
+
+    // lock rate per entry
+    const rateUsed = Number(getLocalStorage(exchangeRateKey, currentRate)) || Number(currentRate) || null;
+
+    const newExpense = {
+      id: Date.now(),
+      item,
+      amount, // stored in original currency unit
+      currency: (currency === "TWD") ? "TWD" : "VND",
+      rateUsed: rateUsed,
+      category,
+      consumers: consumersRaw,
+      payers,
+      isSettled: false,
+      photo: base64Photo,
+      timestamp: new Date().toISOString(),
+      lastModifiedAt: new Date().toISOString(),
+      spentAt,
+      note
+    };
+
+    let expenses = getLocalStorage(expensesKey, []);
+    if (!Array.isArray(expenses)) expenses = [];
+    expenses.push(newExpense);
+    setLocalStorage(expensesKey, expenses);
+
+    // reset form
+    if (itemInput) itemInput.value = "";
+    if (amountInput) amountInput.value = "";
+    if (noteInput) noteInput.value = "";
+    if (categoryInput) categoryInput.value = (EXPENSE_CATEGORIES && EXPENSE_CATEGORIES[0] ? EXPENSE_CATEGORIES[0].key : "Other");
+    if (photoInput) photoInput.value = "";
+    const preview = document.getElementById("photo-preview");
+    if (preview) preview.innerHTML = "（圖片壓縮後不會佔用太多容量，有照片時不會顯示分類圖示）";
+    base64Photo = null;
+    setExpenseTimeNow();
+    document.querySelectorAll(".consume-checkbox").forEach(el => el.checked = false);
+    document.querySelectorAll(".payer-checkbox").forEach(el => el.checked = false);
+
+    normalizeAllExpensesV21();
+    renderExpenseList();
+    alertModal("開銷項目已成功紀錄！");
+  });
+}
+
+// --- v21: override saveExpenseEdit (keep dual-currency, keep locked rate) ---
+function saveExpenseEdit(expenseId) {
+  const itemEl = document.getElementById(`edit-item-${expenseId}`);
+  const amountEl = document.getElementById(`edit-amount-${expenseId}`);
+  const currencyEl = document.getElementById(`edit-currency-${expenseId}`);
+  const categoryEl = document.getElementById(`edit-category-${expenseId}`);
+  const timeEl = document.getElementById(`edit-time-${expenseId}`);
+  const noteEl = document.getElementById(`edit-note-${expenseId}`);
+
+  const item = itemEl ? String(itemEl.value || "").trim() : "";
+  const currency = currencyEl ? String(currencyEl.value || "VND").toUpperCase() : "VND";
+  const amount = Math.max(0, Math.trunc(Number(amountEl ? amountEl.value : 0)));
+  const category = categoryEl ? String(categoryEl.value || "Other") : "Other";
+  const spentAt = timeEl ? String(timeEl.value || "").trim() : "";
+  const note = noteEl ? String(noteEl.value || "").trim() : "";
+
+  const consumers = Array.from(document.querySelectorAll(`.edit-consumer-${expenseId}:checked`)).map(el => el.value);
+  const payers = Array.from(document.querySelectorAll(`.edit-payer-${expenseId}:checked`)).map(el => el.value);
+
+  if (!item || !Number.isFinite(amount) || amount <= 0) {
+    alertModal("請輸入有效的品項名稱和金額。");
+    return;
+  }
+  if (!consumers.length) {
+    alertModal("請至少勾選一位「誰消費」。若為大家一起吃，請勾選「全體」。");
+    return;
+  }
+
+  let expenses = getLocalStorage(expensesKey, []);
+  if (!Array.isArray(expenses)) expenses = [];
+  const idx = expenses.findIndex(e => Number(e.id) === Number(expenseId));
+  if (idx < 0) return;
+
+  const old = normalizeExpenseV21(expenses[idx]) || expenses[idx] || {};
+  expenses[idx] = {
+    ...expenses[idx],
+    item,
+    amount,
+    currency: (currency === "TWD") ? "TWD" : "VND",
+    category,
+    consumers,
+    payers,
+    note,
+    spentAt: spentAt || old.spentAt || old.timestamp || new Date().toISOString(),
+    // keep locked rate; if missing, set current
+    rateUsed: (old.rateUsed === null || old.rateUsed === undefined) ? (Number(getLocalStorage(exchangeRateKey, currentRate)) || Number(currentRate) || null) : old.rateUsed,
+    lastModifiedAt: new Date().toISOString()
+  };
+  setLocalStorage(expensesKey, expenses);
+
+  // hide panel
+  const panel = document.getElementById(`edit-panel-${expenseId}`);
+  if (panel) panel.classList.add("hidden");
+
+  normalizeAllExpensesV21();
+  renderExpenseList();
+  alertModal("已儲存變更。");
+}
+
+// --- v21: override export report (CSV/PDF) for dual-currency ---
+function exportReportCSV() {
+  try {
+    const expenses = normalizeAllExpensesV21();
+    const rateDefault = Number(getLocalStorage(exchangeRateKey, currentRate)) || Number(currentRate) || 0;
+
+    const catMap = {};
+    (EXPENSE_CATEGORIES || []).forEach(c => { catMap[c.key] = c.name; });
+
+    const header = [
+      "消費時間",
+      "品項",
+      "分類",
+      "幣別",
+      "金額",
+      "該筆匯率(VND→TWD)",
+      "換算金額(參考)",
+      "誰消費",
+      "誰結帳",
+      "備註",
+      "是否結清"
+    ];
+    const rows = [header];
+
+    const sorted = [...expenses].sort((a,b)=> String(a.spentAt||"") < String(b.spentAt||"") ? -1 : 1);
+
+    for (const e of sorted) {
+      const dt = (e.spentAt && String(e.spentAt).includes("T")) ? e.spentAt : _formatDateTimeLocal(e.spentAt, e.timestamp);
+      const cur = e.currency || "VND";
+      const amt = Math.max(0, _v21SafeInt(e.amount, 0));
+      const rateLine = (e.rateUsed === null || e.rateUsed === undefined) ? rateDefault : Number(e.rateUsed);
+      let ref = "";
+      if (cur === "VND") {
+        // VND -> TWD
+        const twd = (Number.isFinite(rateLine) && rateLine) ? (amt * rateLine) : 0;
+        ref = `${TWD_SYMBOL} ${(Math.round(twd * 1000) / 1000).toLocaleString()}`;
+      } else {
+        // TWD -> VND
+        const vnd = (Number.isFinite(rateLine) && rateLine) ? Math.round(amt / rateLine) : 0;
+        ref = `${Number(vnd).toLocaleString()} VND(đ)`;
+      }
+
+      const consumers = Array.isArray(e.consumers) ? e.consumers.join("、") : "";
+      const payers = Array.isArray(e.payers) ? e.payers.join("、") : "";
+      const catName = catMap[e.category] || e.category || "";
+
+      rows.push([
+        dt,
+        e.item || "",
+        catName,
+        cur,
+        amt,
+        (Number.isFinite(rateLine) ? rateLine : ""),
+        ref,
+        consumers,
+        payers,
+        e.note || "",
+        e.isSettled ? "已結清" : "未結清"
+      ]);
+    }
+
+    const csv = rows.map(r => r.map(_csvEscape).join(",")).join("\r\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    const ts = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const name = `vn_trip_report_${ts.getFullYear()}-${pad(ts.getMonth()+1)}-${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}.csv`;
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+  } catch (err) {
+    console.error(err);
+    alertModal("匯出 CSV 失敗，請打開開發者工具查看錯誤。");
+  }
+}
+
+function exportReportPDF() {
+  try {
+    const expenses = normalizeAllExpensesV21();
+    const rateDefault = Number(getLocalStorage(exchangeRateKey, currentRate)) || Number(currentRate) || 0;
+
+    const catMap = {};
+    (EXPENSE_CATEGORIES || []).forEach(c => { catMap[c.key] = c.name; });
+
+    const sorted = [...expenses].sort((a,b)=> String(a.spentAt||"") < String(b.spentAt||"") ? -1 : 1);
+
+    const win = window.open("", "_blank");
+    if (!win) {
+      alertModal("無法開啟列印視窗（可能被瀏覽器阻擋彈出視窗）。請允許彈出視窗後再試一次。");
+      return;
+    }
+
+    const escapeHtml = (s) => String(s ?? "")
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+
+    let rowsHtml = "";
+    for (const e of sorted) {
+      const dt = (e.spentAt && String(e.spentAt).includes("T")) ? e.spentAt : _formatDateTimeLocal(e.spentAt, e.timestamp);
+      const cur = e.currency || "VND";
+      const amt = Math.max(0, _v21SafeInt(e.amount, 0));
+      const rateLine = (e.rateUsed === null || e.rateUsed === undefined) ? rateDefault : Number(e.rateUsed);
+
+      let ref = "";
+      if (cur === "VND") {
+        const twd = (Number.isFinite(rateLine) && rateLine) ? (amt * rateLine) : 0;
+        ref = `${TWD_SYMBOL} ${(Math.round(twd * 1000) / 1000).toLocaleString()}`;
+      } else {
+        const vnd = (Number.isFinite(rateLine) && rateLine) ? Math.round(amt / rateLine) : 0;
+        ref = `${Number(vnd).toLocaleString()} VND(đ)`;
+      }
+
+      const consumers = Array.isArray(e.consumers) ? e.consumers.join("、") : "";
+      const payers = Array.isArray(e.payers) ? e.payers.join("、") : "";
+      const catName = catMap[e.category] || e.category || "";
+
+      rowsHtml += `<tr>
+        <td>${escapeHtml(dt)}</td>
+        <td>${escapeHtml(e.item || "")}</td>
+        <td>${escapeHtml(catName)}</td>
+        <td>${escapeHtml(cur)}</td>
+        <td style="text-align:right;">${escapeHtml(amt)}</td>
+        <td style="text-align:right;">${escapeHtml(Number.isFinite(rateLine) ? rateLine : "")}</td>
+        <td>${escapeHtml(ref)}</td>
+        <td>${escapeHtml(consumers)}</td>
+        <td>${escapeHtml(payers)}</td>
+        <td>${escapeHtml(e.note || "")}</td>
+        <td>${e.isSettled ? "已結清" : "未結清"}</td>
+      </tr>`;
+    }
+
+    const title = escapeHtml(getLocalStorage(APP_TITLE_KEY, DEFAULT_TITLE));
+    win.document.open();
+    win.document.write(`<!doctype html><html><head><meta charset="utf-8">
+      <title>${title}｜匯出總報表</title>
+      <style>
+        body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC",Arial; padding:16px;}
+        h1{font-size:18px; margin:0 0 8px;}
+        .meta{font-size:12px; color:#666; margin-bottom:12px;}
+        table{width:100%; border-collapse:collapse; font-size:12px;}
+        th,td{border:1px solid #ddd; padding:6px; vertical-align:top;}
+        th{background:#f5f5f5;}
+        @media print { body{padding:0;} .no-print{display:none;} }
+      </style>
+    </head><body>
+      <h1>${title}｜匯出總報表</h1>
+      <div class="meta">預設匯率(VND→TWD)：${escapeHtml(rateDefault)}　｜　匯出時間：${escapeHtml(new Date().toLocaleString())}</div>
+      <div class="no-print" style="margin:0 0 12px;">
+        <button onclick="window.print()">列印 / 另存為 PDF</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>消費時間</th><th>品項</th><th>分類</th>
+            <th>幣別</th><th>金額</th><th>該筆匯率</th><th>換算金額(參考)</th>
+            <th>誰消費</th><th>誰結帳</th><th>備註</th><th>結清</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml || `<tr><td colspan="11" style="text-align:center; color:#666;">目前沒有記帳紀錄。</td></tr>`}</tbody>
+      </table>
+    </body></html>`);
+    win.document.close();
+    setTimeout(()=>{ try{ win.focus(); }catch(e){} }, 300);
+  } catch (err) {
+    console.error(err);
+    alertModal("匯出 PDF 失敗，請打開開發者工具查看錯誤。");
+  }
+}
+
+// --- v21: override renderExpenseList (dual currency: totals/splits/settlement separated; no cross-currency offset) ---
+function renderExpenseList() {
+  const container = document.getElementById("expense-list-container");
+  if (!container) return;
+
+  const expenses = normalizeAllExpensesV21();
+
+  // Trip days based on itinerary labels (Day1-1/24(六) etc.)
+  const tripDays = Array.isArray(tripData?.itinerary) ? tripData.itinerary : [];
+  const dayBlocks = tripDays.map(d => {
+    const label = String(d?.date || "").trim() || "未命名";
+    const m = label.match(/(\d+)\s*\/\s*(\d+)/);
+    const md = m ? `${parseInt(m[1],10)}/${parseInt(m[2],10)}` : null;
+    return { label, md };
+  }).filter(x => !!x.md);
+
+  const toDate = (x) => {
+    const d = x ? new Date(x) : new Date(NaN);
+    return isNaN(d.getTime()) ? null : d;
+  };
+  const getSpentAt = (exp) => exp?.spentAt || exp?.timestamp || exp?.createdAt || null;
+  const getMD = (d) => d ? `${d.getMonth()+1}/${d.getDate()}` : null;
+
+  const sorted = expenses.slice().sort((a,b)=> {
+    const da = toDate(getSpentAt(a)) || new Date(0);
+    const db = toDate(getSpentAt(b)) || new Date(0);
+    return da - db;
+  });
+
+  // Group by day blocks
+  const groups = {};
+  dayBlocks.forEach(b => groups[b.md] = []);
+  const others = [];
+  for (const e of sorted) {
+    const d = toDate(getSpentAt(e));
+    const md = getMD(d);
+    if (md && Object.prototype.hasOwnProperty.call(groups, md)) groups[md].push(e);
+    else others.push(e);
+  }
+
+  // Split totals by currency
+  const totalByCur = { VND: 0, TWD: 0 };
+  const personByCur = {
+    VND: { "欣":0,"珈":0,"芷":0,"湘":0 },
+    TWD: { "欣":0,"珈":0,"芷":0,"湘":0 }
+  };
+
+  function splitMapCur(exp) {
+    const cur = (String(exp.currency||"VND").toUpperCase()==="TWD") ? "TWD" : "VND";
+    const amt = Math.max(0, _v21SafeInt(exp.amount,0));
+    const cons = normalizeConsumersV21(exp.consumers);
+    if (!amt || !cons.length) return { cur, map: {} };
+    const shares = splitIntegerFairV21(amt, cons, `cons|${exp.id}|${exp.spentAt||""}|${cur}`);
+    const m = {};
+    cons.forEach(p => m[p] = (m[p]||0) + (shares[p]||0));
+    return { cur, map: m };
+  }
+
+  for (const e of sorted) {
+    const cur = (String(e.currency||"VND").toUpperCase()==="TWD") ? "TWD" : "VND";
+    totalByCur[cur] += Math.max(0, _v21SafeInt(e.amount,0));
+    const sm = splitMapCur(e);
+    for (const p of V21_PEOPLE) personByCur[sm.cur][p] += _v21SafeInt(sm.map[p],0);
+  }
+
+  const hasAny = sorted.length > 0;
+  const rateDefault = Number(getLocalStorage(exchangeRateKey, currentRate)) || Number(currentRate) || 0;
+
+  // Trip settlement per currency (no cross-currency offset)
+  const tripNetVND = computeNetPairsByCurrency(sorted, "TRIP_TOTAL_VND", "VND").filter(x=>x.total>0);
+  const tripNetTWD = computeNetPairsByCurrency(sorted, "TRIP_TOTAL_TWD", "TWD").filter(x=>x.total>0);
+
+  // Build top cards
+  let html = `
+    ${hasAny ? `
+      <div class="muji-card p-4 mb-4" style="background-color: #d7e4f7; border-color: var(--color-accent);">
+        <p class="text-lg font-bold text-center" style="color: var(--color-text-main);">旅遊總計</p>
+        <div class="mt-2 space-y-1 text-center">
+          <div class="text-xl font-bold" style="color: var(--color-text-main);">${Number(totalByCur.VND).toLocaleString()} VND(đ)</div>
+          <div class="text-xl font-bold" style="color: var(--color-text-main);">${TWD_SYMBOL} ${Number(totalByCur.TWD).toLocaleString()}</div>
+        </div>
+
+        <div class="mt-4 grid grid-cols-2 gap-2">
+          ${V21_PEOPLE.map(p => `
+            <div class="p-3 rounded-lg border bg-white" style="border-color: var(--color-divider);">
+              <div class="text-sm font-semibold" style="color: var(--color-text-main);">${p} 的總計</div>
+              <div class="text-sm mt-1" style="color: var(--color-text-main);">${Number(personByCur.VND[p]).toLocaleString()} VND(đ)</div>
+              <div class="text-sm mt-1" style="color: var(--color-text-main);">${TWD_SYMBOL} ${Number(personByCur.TWD[p]).toLocaleString()}</div>
+            </div>
+          `).join("")}
+        </div>
+
+        <p class="text-xs text-gray-600 mt-3">※ 分攤規則：選「全體」→ 4 人均分；只勾選部分人 → 只在勾選的人之間均分。</p>
+      </div>
+
+      <div class="muji-card p-4 mb-4" style="background-color: #d7e4f7; border-color: var(--color-accent);">
+        <p class="text-lg font-bold" style="color: var(--color-text-main);">旅遊總結清（全旅程淨額）</p>
+        <details class="mt-2 text-xs text-gray-700 leading-relaxed">
+          <summary class="cursor-pointer underline text-gray-600 select-none">查看結算規則</summary>
+          <div class="mt-2">
+            <ul class="list-disc pl-5 space-y-1">
+              <li>僅計入：未結清、且「誰結帳」不是「各自」的記帳。</li>
+              <li>每筆以整數均分：先取整數，再將餘數以「輪流方式」分配到不同人，讓誤差平均分攤。</li>
+              <li>若同一對象互相欠款：只抵銷相同金額；相減後若仍有剩餘，仍需給付剩餘額。</li>
+              <li>多人付款：同一筆「付款金額」在付款人之間<strong>須均分付款</strong>（整數均分；餘數輪流分配）。</li>
+              <li><strong>兩種幣別各自存檔結清</strong>（跨幣別不允許抵銷）。</li>
+            </ul>
+          </div>
+        </details>
+
+        <div class="mt-3 space-y-4">
+          <div>
+            <div class="text-sm font-bold mb-2" style="color: var(--color-text-main);">VND 結清</div>
+            ${tripNetVND.length ? tripNetVND.map(x => `
+              <div class="flex items-center justify-between gap-3 p-3 rounded-lg border bg-white mb-2" style="border-color: var(--color-divider);">
+                <div class="text-sm font-semibold" style="color: var(--color-text-main);">${x.from} → ${x.to}</div>
+                <div class="text-sm font-bold" style="color: var(--color-text-main);">${Number(x.total).toLocaleString()} VND(đ)</div>
+              </div>
+            `).join("") : `<p class="text-sm text-gray-500">目前無需轉帳。</p>`}
+          </div>
+
+          <div>
+            <div class="text-sm font-bold mb-2" style="color: var(--color-text-main);">TWD 結清</div>
+            ${tripNetTWD.length ? tripNetTWD.map(x => `
+              <div class="flex items-center justify-between gap-3 p-3 rounded-lg border bg-white mb-2" style="border-color: var(--color-divider);">
+                <div class="text-sm font-semibold" style="color: var(--color-text-main);">${x.from} → ${x.to}</div>
+                <div class="text-sm font-bold" style="color: var(--color-text-main);">${TWD_SYMBOL} ${Number(x.total).toLocaleString()}</div>
+              </div>
+            `).join("") : `<p class="text-sm text-gray-500">目前無需轉帳。</p>`}
+          </div>
+        </div>
+      </div>
+    ` : `<p class="text-center text-gray-500 p-4">目前沒有記帳紀錄。</p>`}
+  `;
+
+  // Expense row renderer
+  const escHtml = (s) => String(s ?? "")
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+
+  const toInputDT = (dateObj) => {
+    if (!dateObj) return "";
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${dateObj.getFullYear()}-${pad(dateObj.getMonth()+1)}-${pad(dateObj.getDate())}T${pad(dateObj.getHours())}:${pad(dateObj.getMinutes())}`;
+  };
+
+  function renderExpenseRow(exp) {
+    const catInfo = getCategoryInfo(exp.category);
+    const consumers = Array.isArray(exp.consumers) ? exp.consumers : [];
+    const payers = Array.isArray(exp.payers) ? exp.payers : [];
+    const note = (exp && typeof exp.note === "string") ? exp.note.trim() : "";
+
+    const d = toDate(getSpentAt(exp));
+    const timeLabel = d ? `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "-";
+    const editTimeValue = exp?.spentAt ? String(exp.spentAt) : toInputDT(d);
+    const consumerIsAll = consumers.includes("全體");
+    const isSettled = !!exp.isSettled;
+
+    const cur = (String(exp.currency||"VND").toUpperCase()==="TWD") ? "TWD" : "VND";
+    const amt = Math.max(0, _v21SafeInt(exp.amount,0));
+    const r = (exp.rateUsed === null || exp.rateUsed === undefined) ? rateDefault : Number(exp.rateUsed);
+    let refLine = "";
+    if (cur === "VND") {
+      const twd = (Number.isFinite(r) && r) ? (amt * r) : 0;
+      refLine = `${TWD_SYMBOL} ${(Math.round(twd*1000)/1000).toLocaleString()}`;
+    } else {
+      const vnd = (Number.isFinite(r) && r) ? Math.round(amt / r) : 0;
+      refLine = `${Number(vnd).toLocaleString()} VND(đ)`;
+    }
+
+    const whoLine = (consumers.length || payers.length)
+      ? `<p class="text-xs text-gray-500 mt-0.5">消費：${consumers.length ? consumers.map(escHtml).join("、") : "-"} ｜ 結帳：${payers.length ? payers.map(escHtml).join("、") : "-"}</p>`
+      : "";
+
+    const noteLine = note ? `<p class="text-xs text-gray-500 mt-0.5 truncate">備註：${escHtml(note)}</p>` : "";
+
+    return `
+      <div class="muji-card p-3 border" style="border-color: var(--color-divider);">
+        <div class="flex items-start justify-between gap-3">
+          <div class="flex items-start space-x-3 flex-1 min-w-0">
+            ${exp.photo
+              ? `<img src="${exp.photo}" alt="收據縮圖" class="w-12 h-12 object-cover rounded-md border" style="border-color: var(--color-divider);">`
+              : `<div class="w-12 h-12 flex items-center justify-center rounded-md text-white text-xl shadow-md" style="background-color: var(--color-text-main);">
+                  <i class="fas ${catInfo.icon}"></i>
+                </div>`
+            }
+            <div class="truncate flex-1 min-w-0">
+              <p class="font-medium truncate" style="color: var(--color-text-main);">${escHtml(exp.item)}</p>
+              <p class="text-xs text-gray-500">${escHtml(catInfo.name)} - ${escHtml(timeLabel)}</p>
+              ${whoLine}
+              ${noteLine}
+            </div>
+          </div>
+
+          <div class="text-right flex flex-col items-end justify-between space-y-1 ml-2 shrink-0">
+            <p class="text-sm font-semibold whitespace-nowrap" style="color: var(--color-text-main);">
+              ${cur === "TWD" ? `${TWD_SYMBOL} ${Number(amt).toLocaleString()}` : `${Number(amt).toLocaleString()} VND(đ)`}
+            </p>
+            <p class="text-xs text-gray-500 whitespace-nowrap">參考：${escHtml(refLine)}</p>
+
+            <button onclick="toggleExpenseSettled(${exp.id})" class="flex items-center gap-2 text-[11px] px-2 py-1 rounded-full border hover:shadow-sm transition duration-150"
+              style="border-color: var(--color-divider); background-color: ${isSettled ? "#d7e4f7" : "white"};">
+              <span class="inline-flex items-center justify-center w-4 h-4 rounded-full border"
+                style="border-color: ${isSettled ? "var(--color-accent)" : "var(--color-divider)"}; background-color: ${isSettled ? "var(--color-accent)" : "transparent"};">
+                ${isSettled ? '<i class=&quot;fas fa-check text-[10px] text-white&quot;></i>' : ''}
+              </span>
+              <span class="whitespace-nowrap">${isSettled ? "已結清" : "未結清"}</span>
+            </button>
+
+            <div class="flex items-center gap-2">
+              <button onclick="toggleExpenseEdit(${exp.id})" class="text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 p-1 rounded transition duration-150 whitespace-nowrap">
+                <i class="fas fa-pen mr-1"></i> 編輯
+              </button>
+              <button onclick="deleteExpense(${exp.id})" class="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded transition duration-150 whitespace-nowrap">
+                <i class="fas fa-trash-alt mr-1"></i> 刪除
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="edit-panel-${exp.id}" class="hidden mt-3 pt-3 border-t" style="border-color: var(--color-divider);">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div>
+              <label class="block text-xs text-gray-600 mb-1">消費時間</label>
+              <input type="datetime-local" id="edit-time-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);" value="${escHtml(editTimeValue)}">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-600 mb-1">分類</label>
+              <select id="edit-category-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);">
+                ${(EXPENSE_CATEGORIES||[]).map(cat => `<option value="${cat.key}" ${cat.key === exp.category ? "selected" : ""}>${cat.name}</option>`).join("")}
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-600 mb-1">品項</label>
+              <input type="text" id="edit-item-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);" value="${escHtml(exp.item || "")}">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-600 mb-1">金額</label>
+              <div class="flex gap-2">
+                <select id="edit-currency-${exp.id}" class="p-2 border rounded-lg text-sm" style="border-color: var(--color-divider); background-color: white;">
+                  <option value="VND" ${cur==="VND" ? "selected" : ""}>VND</option>
+                  <option value="TWD" ${cur==="TWD" ? "selected" : ""}>TWD</option>
+                </select>
+                <input type="number" id="edit-amount-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);" value="${amt}">
+              </div>
+              <p class="text-xs text-gray-500 mt-1">此筆會保留原本鎖定的匯率（用於參考換算與報表）。</p>
+            </div>
+            <div class="md:col-span-2">
+              <label class="block text-xs text-gray-600 mb-1">備註</label>
+              <input type="text" id="edit-note-${exp.id}" class="w-full p-2 border rounded-lg text-sm" style="border-color: var(--color-divider);" value="${escHtml(note)}" placeholder="備註（可自由填寫）">
+            </div>
+          </div>
+
+          <div class="mt-3">
+            <p class="text-sm font-medium mb-1" style="color: var(--color-text-main);">誰消費（可複選）</p>
+            <div class="flex flex-wrap gap-2">
+              <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
+                <input type="checkbox" class="edit-consumer-${exp.id} h-4 w-4" value="全體" ${consumerIsAll ? "checked" : ""}>
+                <span>全體</span>
+              </label>
+              ${V21_PEOPLE.map(p => `
+                <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
+                  <input type="checkbox" class="edit-consumer-${exp.id} h-4 w-4" value="${p}" ${(!consumerIsAll && consumers.includes(p)) ? "checked" : ""}>
+                  <span>${p}</span>
+                </label>
+              `).join("")}
+            </div>
+            <p class="text-xs text-gray-500 mt-1">※ 若勾選「全體」，儲存時會以 4 人均分計算（其餘勾選會被忽略）。</p>
+          </div>
+
+          <div class="mt-3">
+            <p class="text-sm font-medium mb-1" style="color: var(--color-text-main);">誰結帳（可複選）</p>
+            <div class="flex flex-wrap gap-2">
+              <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
+                <input type="checkbox" class="edit-payer-${exp.id} h-4 w-4" value="各自" ${payers.includes("各自") ? "checked" : ""}>
+                <span>各自</span>
+              </label>
+              ${V21_PEOPLE.map(p => `
+                <label class="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm" style="border-color: var(--color-divider); background-color: white;">
+                  <input type="checkbox" class="edit-payer-${exp.id} h-4 w-4" value="${p}" ${payers.includes(p) ? "checked" : ""}>
+                  <span>${p}</span>
+                </label>
+              `).join("")}
+            </div>
+            <p class="text-xs text-gray-500 mt-1">※ 多人付款：此筆付款金額會在付款人之間均分付款（整數均分；餘數輪流分配）。</p>
+          </div>
+
+          <div class="mt-4 flex gap-2">
+            <button onclick="saveExpenseEdit(${exp.id})" class="muji-btn flex-1" style="height: 42px;">儲存</button>
+            <button onclick="cancelExpenseEdit(${exp.id})" class="muji-btn flex-1" style="height: 42px; background-color: #E9E1DA;">取消</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderSettleSection(dayKey, items, cur) {
+    const lines = computeNetPairsByCurrency(items, dayKey, cur).filter(x=>x.total>0);
+    const curLabel = (cur==="TWD") ? "TWD" : "VND";
+    const noText = (cur==="TWD") ? "（本日 TWD 無需結清）" : "（本日 VND 無需結清）";
+    return `
+      <div class="mt-3">
+        <div class="flex items-center justify-between">
+          <div class="text-sm font-bold" style="color: var(--color-text-main);">${curLabel} 結清</div>
+          <div class="text-xs text-gray-500">${curLabel} 僅與同幣別互相抵銷</div>
+        </div>
+        ${lines.length ? `
+          <div class="mt-2 space-y-2">
+            ${lines.map(x => {
+              const isDone = (x.remaining <= 0);
+              const dkEsc = String(dayKey).replace(/\\/g,"\\\\").replace(/'/g,"\\'");
+              return `
+                <div class="flex items-center justify-between gap-3 p-3 rounded-lg border" style="border-color: var(--color-divider); background-color: ${isDone ? "#d7e4f7" : "var(--color-bg-primary)"};">
+                  <div class="min-w-0">
+                    <div class="text-sm font-semibold truncate" style="color: var(--color-text-main);">${x.from} → ${x.to}</div>
+                    <div class="text-[11px] text-gray-500 mt-0.5">${isDone ? "已結清" : `剩餘：${formatCurrencyAmount(cur, x.remaining)}`}</div>
+                  </div>
+                  <div class="flex items-center gap-3 shrink-0">
+                    <div class="text-right">
+                      <div class="text-sm font-semibold" style="color: var(--color-text-main);">${formatCurrencyAmount(cur, x.total)}</div>
+                    </div>
+                    <button onclick="toggleSettleLine('${dkEsc}', '${cur}', '${x.from}', '${x.to}', ${x.total})"
+                      class="flex items-center gap-2 text-[11px] px-2 py-1 rounded-full border hover:shadow-sm transition duration-150"
+                      style="border-color: var(--color-divider); background-color: ${isDone ? "#d7e4f7" : "white"};">
+                      <span class="inline-flex items-center justify-center w-5 h-5 rounded-full border"
+                        style="border-color: ${isDone ? "var(--color-accent)" : "var(--color-divider)"}; background-color: ${isDone ? "var(--color-accent)" : "transparent"};">
+                        ${isDone ? '<i class=&quot;fas fa-check text-[11px] text-white&quot;></i>' : ''}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        ` : `<p class="text-sm text-gray-400 mt-2">${noText}</p>`}
+      </div>
+    `;
+  }
+
+  function daySection(label, md, items) {
+    const dayKey = md ? String(md) : "其他";
+
+    const dayTotalVND = items.filter(e => String(e.currency||"VND").toUpperCase()!=="TWD").reduce((s,e)=> s + Math.max(0,_v21SafeInt(e.amount,0)), 0);
+    const dayTotalTWD = items.filter(e => String(e.currency||"VND").toUpperCase()==="TWD").reduce((s,e)=> s + Math.max(0,_v21SafeInt(e.amount,0)), 0);
+
+    const dayPersonVND = { "欣":0,"珈":0,"芷":0,"湘":0 };
+    const dayPersonTWD = { "欣":0,"珈":0,"芷":0,"湘":0 };
+    for (const e of items) {
+      const {cur, map} = splitMapCur(e);
+      for (const p of V21_PEOPLE) {
+        if (cur==="TWD") dayPersonTWD[p] += _v21SafeInt(map[p],0);
+        else dayPersonVND[p] += _v21SafeInt(map[p],0);
+      }
+    }
+
+    const header = `
+      <div class="muji-card p-4 mb-3" style="border-color: var(--color-divider); background-color: var(--color-bg-primary);">
+        <div class="flex items-center justify-between gap-3">
+          <div class="text-base font-bold" style="color: var(--color-text-main);">${label}</div>
+          <div class="text-right space-y-1">
+            <div class="text-sm font-semibold" style="color: var(--color-text-main);">當天總計：${Number(dayTotalVND).toLocaleString()} VND(đ)</div>
+            <div class="text-sm font-semibold" style="color: var(--color-text-main);">當天總計：${TWD_SYMBOL} ${Number(dayTotalTWD).toLocaleString()}</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const splitCard = items.length ? `
+      <div class="muji-card p-4 mb-3" style="background-color: #d7e4f7; border-color: var(--color-divider);">
+        <div class="flex items-center justify-between">
+          <div class="text-sm font-bold" style="color: var(--color-text-main);">當日總計</div>
+          <div class="text-xs text-gray-600">（依分攤；雙幣別各自計算）</div>
+        </div>
+        <div class="mt-3 grid grid-cols-2 gap-2">
+          ${V21_PEOPLE.map(p => `
+            <div class="p-3 rounded-lg border bg-white" style="border-color: var(--color-divider);">
+              <div class="text-sm font-semibold" style="color: var(--color-text-main);">${p}</div>
+              <div class="text-sm mt-1" style="color: var(--color-text-main);">${Number(dayPersonVND[p]).toLocaleString()} VND(đ)</div>
+              <div class="text-sm mt-1" style="color: var(--color-text-main);">${TWD_SYMBOL} ${Number(dayPersonTWD[p]).toLocaleString()}</div>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    ` : "";
+
+    const settleCard = items.length ? `
+      <div class="muji-card p-4 mb-3" style="border-color: var(--color-divider); background-color: white;">
+        <div class="flex items-center justify-between">
+          <div class="text-sm font-bold" style="color: var(--color-text-main);">結清計算</div>
+          <div class="text-xs text-gray-500">（排除：手動已結清、誰結帳=各自；支援多人付款；跨幣別不抵銷）</div>
+        </div>
+        ${renderSettleSection(dayKey, items, "VND")}
+        ${renderSettleSection(dayKey, items, "TWD")}
+        <p class="text-[11px] text-gray-500 mt-3">提示：上方「結清計算」的圓形按鈕是用來標記該筆「轉帳」是否已結清（只影響上方結清計算的剩餘）。下方每筆明細右側的圓形按鈕才是標記「該筆開銷」是否已結清；明細已結清後，該筆不再列入上方計算。</p>
+      </div>
+    ` : "";
+
+    const body = items.length
+      ? `<div class="space-y-3 mb-6">${items.map(renderExpenseRow).join("")}</div>`
+      : `<p class="text-center text-gray-400 text-sm mb-6">（這一天尚無記帳紀錄）</p>`;
+
+    return header + splitCard + settleCard + body;
+  }
+
+  // Output fixed 4 days in order
+  dayBlocks.forEach(b => {
+    html += daySection(b.label, b.md, groups[b.md] || []);
+  });
+  if (others.length) {
+    html += daySection("其他", null, others);
+  }
+
+  container.innerHTML = html;
+}
+// ===============================
+// End v21 PATCH
+// ===============================
+
 
 
 
